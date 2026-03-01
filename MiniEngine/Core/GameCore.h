@@ -18,6 +18,7 @@
 namespace GameCore
 {
     extern bool gIsSupending;
+    extern ID3D12DescriptorHeap* g_ImguiHeap;
 
     class IGameApp
     {

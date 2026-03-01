@@ -73,8 +73,7 @@ void ModelInstance::Render(MeshSorter& sorter) const
     if (m_Model != nullptr)
     {
         //const Frustum& frustum = sorter.GetWorldFrustum();
-        m_Model->Render(sorter, m_MeshConstantsGPU, m_BoundingSphereTransforms.get(),
-            m_Skeleton.get());
+        m_Model->Render(sorter, m_MeshConstantsGPU, m_BoundingSphereTransforms.get(), m_Skeleton.get());
     }
 }
 

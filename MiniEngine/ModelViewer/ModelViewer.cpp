@@ -34,7 +34,9 @@
 #include "ShadowCamera.h"
 #include "Display.h"
 
-#define LEGACY_RENDERER
+#include "imgui/imgui.h"
+
+//#define LEGACY_RENDERER
 
 using namespace GameCore;
 using namespace Math;
@@ -54,6 +56,7 @@ public:
 
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
+	virtual void RenderUI(GraphicsContext& Context) override;
 
 private:
 
@@ -146,12 +149,13 @@ void LoadIBLTextures()
 
 void ModelViewer::Startup( void )
 {
-    MotionBlur::Enable = true;
-    TemporalEffects::EnableTAA = true;
-    FXAA::Enable = false;
-    PostEffects::EnableHDR = true;
-    PostEffects::EnableAdaptation = true;
-    SSAO::Enable = true;
+    MotionBlur::Enable = false;
+    TemporalEffects::EnableTAA = false;
+    FXAA::Enable = true;
+    PostEffects::EnableHDR = false;
+    PostEffects::EnableAdaptation = false;
+    SSAO::Enable = false;
+    PostEffects::BloomEnable = false;
 
     Renderer::Initialize();
 
@@ -228,14 +232,6 @@ void ModelViewer::Update( float deltaT )
 
     gfxContext.Finish();
 
-    // We use viewport offsets to jitter sample positions from frame to frame (for TAA.)
-    // D3D has a design quirk with fractional offsets such that the implicit scissor
-    // region of a viewport is floor(TopLeftXY) and floor(TopLeftXY + WidthHeight), so
-    // having a negative fractional top left, e.g. (-0.25, -0.25) would also shift the
-    // BottomRight corner up by a whole integer.  One solution is to pad your viewport
-    // dimensions with an extra pixel.  My solution is to only use positive fractional offsets,
-    // but that means that the average sample position is +0.5, which I use when I disable
-    // temporal AA.
     TemporalEffects::GetJitterOffset(m_MainViewport.TopLeftX, m_MainViewport.TopLeftY);
 
     m_MainViewport.Width = (float)g_SceneColorBuffer.GetWidth();
@@ -316,8 +312,8 @@ void ModelViewer::RenderScene( void )
                 ScopedTimer _prof(L"Sun Shadow Map", gfxContext);
 
                 MeshSorter shadowSorter(MeshSorter::kShadows);
-				shadowSorter.SetCamera(m_SunShadowCamera);
-				shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
+                shadowSorter.SetCamera(m_SunShadowCamera);
+                shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
 
                 m_ModelInst.Render(shadowSorter);
 
@@ -331,7 +327,9 @@ void ModelViewer::RenderScene( void )
             {
                 ScopedTimer _prof(L"Render Color", gfxContext);
 
-                gfxContext.TransitionResource(g_SSAOFullScreen, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                if (SSAO::Enable)
+                    gfxContext.TransitionResource(g_SSAOFullScreen, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
                 gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_READ);
                 gfxContext.SetRenderTarget(g_SceneColorBuffer.GetRTV(), g_SceneDepthBuffer.GetDSV_DepthReadOnly());
                 gfxContext.SetViewportAndScissor(viewport, scissor);
@@ -345,20 +343,59 @@ void ModelViewer::RenderScene( void )
         }
     }
 
-    // Some systems generate a per-pixel velocity buffer to better track dynamic and skinned meshes.  Everything
-    // is static in our scene, so we generate velocity from camera motion and the depth buffer.  A velocity buffer
-    // is necessary for all temporal effects (and motion blur).
-    MotionBlur::GenerateCameraVelocityBuffer(gfxContext, m_Camera, true);
+    // Only generate velocity/resolve when temporal effects and/or motion blur are enabled
+    if (TemporalEffects::EnableTAA || MotionBlur::Enable)
+    {
+        MotionBlur::GenerateCameraVelocityBuffer(gfxContext, m_Camera, true);
+    }
 
-    TemporalEffects::ResolveImage(gfxContext);
+    if (TemporalEffects::EnableTAA)
+        TemporalEffects::ResolveImage(gfxContext);
 
     ParticleEffectManager::Render(gfxContext, m_Camera, g_SceneColorBuffer, g_SceneDepthBuffer,  g_LinearDepth[FrameIndex]);
 
     // Until I work out how to couple these two, it's "either-or".
     if (DepthOfField::Enable)
         DepthOfField::Render(gfxContext, m_Camera.GetNearClip(), m_Camera.GetFarClip());
-    else
+    else if (MotionBlur::Enable)
         MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
     gfxContext.Finish();
+}
+
+void ModelViewer::RenderUI(GraphicsContext& Context)
+{
+    ImGui::Begin("MiniEngine + ImGui Debug");
+
+    ImGui::Text("Application: %s", "Model Viewer");
+    ImGui::Separator();
+
+    ImGui::Text("Frame Time: %.3f ms", Graphics::GetFrameTime() * 1000.0f);
+    ImGui::Text("FPS: %.1f", 1.0f / Graphics::GetFrameTime());
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Post Processing & Rendering");
+
+    if (TemporalEffects::EnableTAA.RenderGui("TAA"))
+        TemporalEffects::ClearHistory(Context);
+
+	SSAO::Enable.RenderGui("SSAO");
+    DepthOfField::Enable.RenderGui("Depth of Field");
+	MotionBlur::Enable.RenderGui("Motion Blur");
+	FXAA::Enable.RenderGui("FXAA");
+
+    ImGui::Separator();
+    PostEffects::EnableHDR.RenderGui("HDR / Tonemap");
+    PostEffects::EnableAdaptation.RenderGui("Auto Exposure");
+    PostEffects::BloomEnable.RenderGui("Bloom");
+
+    ImGui::Separator();
+
+    static int counter = 0;
+    if (ImGui::Button("Click Me"))
+        counter++;
+    ImGui::SameLine();
+    ImGui::Text("Counter = %d", counter);
+
+    ImGui::End();
 }

@@ -1,16 +1,3 @@
-//
-// Copyright (c) Microsoft. All rights reserved.
-// This code is licensed under the MIT License (MIT).
-// THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
-// ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY
-// IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR
-// PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
-//
-// Developed by Minigraph
-//
-// Author:  James Stanard 
-//
-
 #include "pch.h"
 #include "GameCore.h"
 #include "GraphicsCore.h"
@@ -23,15 +10,25 @@
 #include "Util/CommandLineArg.h"
 #include <shellapi.h>
 
+// ImGui Includes
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_win32.h"
+#include "imgui/imgui_impl_dx12.h"
+
 #pragma comment(lib, "runtimeobject.lib") 
+
+// Forward declare the message handler from imgui_impl_win32.cpp
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 namespace GameCore
 {
     using namespace Graphics;
 
     bool gIsSupending = false;
+    ID3D12DescriptorHeap* g_ImguiHeap = nullptr; // Needed for ImGui font texture
+    HWND g_hWnd = nullptr;
 
-    void InitializeApplication( IGameApp& game )
+    void InitializeApplication(IGameApp& game)
     {
         int argc = 0;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -42,27 +39,65 @@ namespace GameCore
         GameInput::Initialize();
         EngineTuning::Initialize();
 
+        // --- ImGui Initialization ---
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::StyleColorsDark();
+
+        // Fix for the builder nullptr: Force font atlas build before backend init
+        ImGuiIO& io = ImGui::GetIO();
+        unsigned char* tex_pixels = nullptr;
+        int tex_w, tex_h;
+        io.Fonts->GetTexDataAsRGBA32(&tex_pixels, &tex_w, &tex_h);
+
+        ImGui_ImplWin32_Init(g_hWnd);
+
+        // Create a small heap for the ImGui font SRV
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        desc.NumDescriptors = 1;
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        g_Device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_ImguiHeap));
+
+        ImGui_ImplDX12_Init(g_Device, 3,
+            DXGI_FORMAT_R11G11B10_FLOAT, // Default MiniEngine HDR Scene Color format
+            g_ImguiHeap,
+            g_ImguiHeap->GetCPUDescriptorHandleForHeapStart(),
+            g_ImguiHeap->GetGPUDescriptorHandleForHeapStart());
+
         game.Startup();
     }
 
-    void TerminateApplication( IGameApp& game )
+    void TerminateApplication(IGameApp& game)
     {
         g_CommandManager.IdleGPU();
 
-        game.Cleanup();
+        // --- ImGui Shutdown ---
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+        if (g_ImguiHeap) g_ImguiHeap->Release();
+        g_ImguiHeap = nullptr;
 
+        game.Cleanup();
         GameInput::Shutdown();
     }
 
-    bool UpdateApplication( IGameApp& game )
+    bool UpdateApplication(IGameApp& game)
     {
         EngineProfiling::Update();
 
         float DeltaTime = Graphics::GetFrameTime();
-    
+
+        // Start the ImGui frame
+        ImGui_ImplDX12_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+
         GameInput::Update(DeltaTime);
         EngineTuning::Update(DeltaTime);
-        
+
         game.Update(DeltaTime);
         game.RenderScene();
 
@@ -73,11 +108,21 @@ namespace GameCore
         UiContext.ClearColor(g_OverlayBuffer);
         UiContext.SetRenderTarget(g_OverlayBuffer.GetRTV());
         UiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
+
+        // App-specific UI (MiniEngine standard)
         game.RenderUI(UiContext);
 
+        // --- ImGui Render Pass ---
+        ID3D12DescriptorHeap* heaps[] = { g_ImguiHeap };
+        UiContext.GetCommandList()->SetDescriptorHeaps(1, heaps);
+
+        ImGui::Render();
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), UiContext.GetCommandList());
+
+        // MiniEngine internal tuning display (rendered after ImGui)
         UiContext.SetRenderTarget(g_OverlayBuffer.GetRTV());
         UiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
-        EngineTuning::Display( UiContext, 10.0f, 40.0f, 1900.0f, 1040.0f );
+        EngineTuning::Display(UiContext, 10.0f, 40.0f, 1900.0f, 1040.0f);
 
         UiContext.Finish();
 
@@ -86,17 +131,14 @@ namespace GameCore
         return !game.IsDone();
     }
 
-    // Default implementation to be overridden by the application
-    bool IGameApp::IsDone( void )
+    bool IGameApp::IsDone(void)
     {
         return GameInput::IsFirstPressed(GameInput::kKey_escape);
     }
 
-    HWND g_hWnd = nullptr;
+    LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
-    LRESULT CALLBACK WndProc( HWND, UINT, WPARAM, LPARAM );
-
-    int RunApplication( IGameApp& app, const wchar_t* className, HINSTANCE hInst, int nCmdShow )
+    int RunApplication(IGameApp& app, const wchar_t* className, HINSTANCE hInst, int nCmdShow)
     {
         if (!XMVerifyCPUSupport())
             return 1;
@@ -131,7 +173,7 @@ namespace GameCore
 
         InitializeApplication(app);
 
-        ShowWindow( g_hWnd, nCmdShow/*SW_SHOWDEFAULT*/ );
+        ShowWindow(g_hWnd, nCmdShow/*SW_SHOWDEFAULT*/);
 
         do
         {
@@ -148,20 +190,20 @@ namespace GameCore
 
             if (done)
                 break;
-        }
-        while (UpdateApplication(app));	// Returns false to quit loop
+        } while (UpdateApplication(app));	// Returns false to quit loop
 
         TerminateApplication(app);
         Graphics::Shutdown();
         return 0;
     }
 
-    //--------------------------------------------------------------------------------------
-    // Called every time the application receives a message
-    //--------------------------------------------------------------------------------------
-    LRESULT CALLBACK WndProc( HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam )
+    LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
-        switch( message )
+        // Let ImGui intercept mouse/keyboard messages
+        if (ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam))
+            return true;
+
+        switch (message)
         {
         case WM_SIZE:
             Display::Resize((UINT)(UINT64)lParam & 0xFFFF, (UINT)(UINT64)lParam >> 16);
@@ -172,10 +214,9 @@ namespace GameCore
             break;
 
         default:
-            return DefWindowProc( hWnd, message, wParam, lParam );
+            return DefWindowProc(hWnd, message, wParam, lParam);
         }
 
         return 0;
     }
-
 }

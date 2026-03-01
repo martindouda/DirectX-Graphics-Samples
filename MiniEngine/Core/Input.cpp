@@ -60,6 +60,35 @@ namespace
     unsigned char s_Keybuffer[256];
     unsigned char s_DXKeyMapping[GameInput::kNumKeys]; // map DigitalInput enum to DX key codes 
 
+    enum class MouseMode
+    {
+        Ui,
+        Look,
+    };
+    MouseMode s_MouseMode = MouseMode::Ui;
+
+    void SetMouseMode(MouseMode mode)
+    {
+        if (s_Mouse == nullptr || s_MouseMode == mode)
+            return;
+
+        s_Mouse->Unacquire();
+
+        /*const DWORD coopFlags = (mode == MouseMode::Look)
+            ? (DISCL_FOREGROUND | DISCL_EXCLUSIVE)
+            : (DISCL_FOREGROUND | DISCL_NONEXCLUSIVE);
+
+        if (FAILED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, coopFlags)))
+            ASSERT(false, "Mouse SetCooperativeLevel failed.");
+
+        // Optional but typically desired: show cursor in UI mode, hide in look mode.
+        if (mode == MouseMode::Look)
+            while (ShowCursor(FALSE) >= 0) {}
+        else
+            while (ShowCursor(TRUE) < 0) {}*/
+
+        s_MouseMode = mode;
+    }
 #endif
 
     inline float FilterAnalogInput( int val, int deadZone )
@@ -218,12 +247,17 @@ namespace
         if (FAILED(s_Keyboard->SetProperty(DIPROP_BUFFERSIZE, &dipdw.diph)))
             ASSERT(false, "Keyboard set buffer size failed.");
 
+
         if (FAILED(s_DI->CreateDevice(GUID_SysMouse, &s_Mouse, nullptr)))
             ASSERT(false, "Mouse CreateDevice failed.");
         if (FAILED(s_Mouse->SetDataFormat(&c_dfDIMouse2)))
             ASSERT(false, "Mouse SetDataFormat failed.");
-        if (FAILED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND | DISCL_EXCLUSIVE)))
+
+        // Start unlocked for UI interaction
+        if (FAILED(s_Mouse->SetCooperativeLevel(GameCore::g_hWnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE)))
             ASSERT(false, "Mouse SetCooperativeLevel failed.");
+
+        s_MouseMode = MouseMode::Ui;
 
         KbmZeroInputs();
     }
@@ -367,6 +401,10 @@ void GameInput::Update( float frameDelta )
 #ifdef USE_KEYBOARD_MOUSE
     KbmUpdate();
 
+    // RMB == kMouse1 in this input enum.
+    const bool wantLookMode = (s_MouseState.rgbButtons[1] > 0);
+    SetMouseMode(wantLookMode ? MouseMode::Look : MouseMode::Ui);
+
     for (uint32_t i = 0; i < kNumKeys; ++i)
     {
         s_Buttons[0][i] = (s_Keybuffer[s_DXKeyMapping[i]] & 0x80) != 0;
@@ -377,8 +415,16 @@ void GameInput::Update( float frameDelta )
         if (s_MouseState.rgbButtons[i] > 0) s_Buttons[0][kMouse0 + i] = true;
     }
 
-    s_Analogs[kAnalogMouseX] = (float)s_MouseState.lX * .0018f;
-    s_Analogs[kAnalogMouseY] = (float)s_MouseState.lY * -.0018f;
+    if (s_MouseState.rgbButtons[1] > 0)
+    {
+        s_Analogs[kAnalogMouseX] = (float)s_MouseState.lX * .0018f;
+        s_Analogs[kAnalogMouseY] = (float)s_MouseState.lY * -.0018f;
+    }
+    else
+    {
+        s_Analogs[kAnalogMouseX] = 0.0f;
+        s_Analogs[kAnalogMouseY] = 0.0f;
+	}
 
     if (s_MouseState.lZ > 0)
         s_Analogs[kAnalogMouseScroll] = 1.0f;

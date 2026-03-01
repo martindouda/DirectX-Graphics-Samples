@@ -59,13 +59,15 @@ void FlyingFPSCamera::Update( float deltaTime )
 
     float timeScale = Graphics::DebugZoom == 0 ? 1.0f : Graphics::DebugZoom == 1 ? 0.5f : 0.25f;
 
-    if (GameInput::IsFirstPressed(GameInput::kLThumbClick) || GameInput::IsFirstPressed(GameInput::kKey_lshift))
+    /*if (GameInput::IsFirstPressed(GameInput::kLThumbClick) || GameInput::IsFirstPressed(GameInput::kKey_lshift))
         m_FineMovement = !m_FineMovement;
-
     if (GameInput::IsFirstPressed(GameInput::kRThumbClick))
-        m_FineRotation = !m_FineRotation;
+        m_FineRotation = !m_FineRotation;*/
 
-    float speedScale = (m_FineMovement ? 0.1f : 1.0f) * timeScale;
+    m_FineMovement = !(GameInput::IsPressed(GameInput::kLThumbClick) || GameInput::IsPressed(GameInput::kKey_lshift));
+
+
+    float speedScale = (m_FineMovement ? 0.2f : 0.6f) * timeScale;
     float panScale = (m_FineRotation ? 0.5f : 1.0f) * timeScale;
 
     float yaw = GameInput::GetTimeCorrectedAnalogInput( GameInput::kAnalogRightStickX ) * m_HorizontalLookSensitivity * panScale;

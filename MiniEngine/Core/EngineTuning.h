@@ -33,6 +33,7 @@ public:
     virtual void Bang( void ) { m_ActionCallback(ActionType::Bang); }		// A Button
 
     virtual void DisplayValue( TextContext& ) const {}
+    virtual bool RenderGui(const std::string& name) { return false; };
     virtual std::string ToString( void ) const { return ""; }
     virtual void SetValue( FILE* file, const std::string& setting) = 0; //set value read from file
 
@@ -77,6 +78,7 @@ public:
     virtual void Bang( void ) override { m_Flag = !m_Flag;  EngineVar::Bang(); }
 
     virtual void DisplayValue( TextContext& Text ) const override;
+    virtual bool RenderGui(const std::string& name) override;
     virtual std::string ToString( void ) const override;
     virtual void SetValue( FILE* file, const std::string& setting) override;
 

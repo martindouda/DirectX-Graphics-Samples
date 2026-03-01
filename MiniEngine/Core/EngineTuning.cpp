@@ -19,6 +19,7 @@
 #include "Display.h"
 #include "CommandContext.h"
 #include "GraphRenderer.h"
+#include "imgui/imgui.h"
 
 using namespace std;
 using namespace Math;
@@ -80,7 +81,8 @@ public:
     virtual void Bang( void ) override { m_IsExpanded = !m_IsExpanded; }
 
     virtual void SetValue( FILE*, const std::string& ) override {}
-    
+    virtual bool RenderGui(const std::string& name) override { return false; }
+
     static VariableGroup sm_RootGroup;
 
 private:
@@ -322,6 +324,11 @@ void BoolVar::SetValue(FILE* file, const std::string& setting)
         0 == _stricmp(valstr, "on") ||
         0 == _stricmp(valstr, "yes") ||
         0 == _stricmp(valstr, "true") );
+}
+
+bool BoolVar::RenderGui(const std::string& name) 
+{
+    return ImGui::Checkbox(name.c_str(), &m_Flag);
 }
 
 NumVar::NumVar( const std::string& path, float val, float minVal, float maxVal, float stepSize, ActionCallback pfnCallback )
