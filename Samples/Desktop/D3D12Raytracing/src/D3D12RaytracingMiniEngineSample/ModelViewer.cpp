@@ -51,6 +51,9 @@
 #include "RaytracingHlslCompat.h"
 #include "ModelViewerRayTracing.h"
 
+#include "imgui/imgui.h"
+
+
 using namespace GameCore;
 using namespace Math;
 using namespace Graphics;
@@ -179,6 +182,7 @@ public:
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
     virtual void RenderUI(class GraphicsContext&) override;
+    virtual void RenderImGui(GraphicsContext& Context);
     virtual void Raytrace(class GraphicsContext&);
 
     virtual bool RequiresRaytracingSupport() const override { return true; }
@@ -1322,6 +1326,65 @@ void D3D12RaytracingMiniEngineSample::RenderUI(class GraphicsContext& gfxContext
     text.Begin();
     text.DrawFormattedString("\nMillion Primary Rays/s: %7.3f", primaryRaysPerSec);
     text.End();
+}
+
+
+void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
+{
+    // Begin the ImGui window
+    ImGui::Begin("MiniEngine Raytracing Controls");
+
+    // 1. Raytracing Mode Selection
+    ImGui::Text("Rendering Modes");
+    int currentMode = (int)rayTracingMode;
+    if (ImGui::Combo("Raytracing Mode", &currentMode, rayTracingModes, _countof(rayTracingModes)))
+    {
+        rayTracingMode = currentMode;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // 2. Post-Processing & Effects
+    ImGui::Text("Post-Processing & Effects");
+    /*if (TemporalEffects::EnableTAA.RenderGui("TAA"))
+        TemporalEffects::ClearHistory(Context);*/
+    SSAO::Enable.RenderGui("SSAO");
+    DepthOfField::Enable.RenderGui("Depth of Field");
+    MotionBlur::Enable.RenderGui("Motion Blur");
+    FXAA::Enable.RenderGui("FXAA");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    PostEffects::EnableHDR.RenderGui("HDR / Tonemap");
+    PostEffects::EnableAdaptation.RenderGui("Auto Exposure");
+    PostEffects::BloomEnable.RenderGui("Bloom");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // 3. Camera Controls
+    ImGui::Text("Camera Controls");
+    int camPos = (int)m_CameraPosArrayCurrentPosition;
+    if (ImGui::SliderInt("Predefined Camera", &camPos, 0, c_NumCameraPositions - 1))
+    {
+        m_CameraPosArrayCurrentPosition = (UINT)camPos;
+        SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
+    }
+
+    // 4. Performance / App info
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::Text("Performance");
+    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+        1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+
+    ImGui::End();
 }
 
 void D3D12RaytracingMiniEngineSample::Raytrace(class GraphicsContext& gfxContext)

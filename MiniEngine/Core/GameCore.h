@@ -18,7 +18,6 @@
 namespace GameCore
 {
     extern bool gIsSupending;
-    extern ID3D12DescriptorHeap* g_ImguiHeap;
 
     class IGameApp
     {
@@ -41,6 +40,9 @@ namespace GameCore
 
         // Optional UI (overlay) rendering pass.  This is LDR.  The buffer is already cleared.
         virtual void RenderUI( class GraphicsContext& ) {};
+
+		// Optional ImGui rendering pass.  This is LDR.  The buffer is already cleared.
+        virtual void RenderImGui( class GraphicsContext& ) {};
 
         // Override this in applications that use DirectX Raytracing to require a DXR-capable device.
         virtual bool RequiresRaytracingSupport() const { return false; }

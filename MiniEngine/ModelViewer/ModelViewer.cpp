@@ -57,6 +57,7 @@ public:
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
 	virtual void RenderUI(GraphicsContext& Context) override;
+	virtual void RenderImGui(GraphicsContext& Context) override;
 
 private:
 
@@ -365,6 +366,11 @@ void ModelViewer::RenderScene( void )
 
 void ModelViewer::RenderUI(GraphicsContext& Context)
 {
+
+}
+
+void ModelViewer::RenderImGui(GraphicsContext& Context)
+{
     ImGui::Begin("MiniEngine + ImGui Debug");
 
     ImGui::Text("Application: %s", "Model Viewer");
@@ -379,10 +385,10 @@ void ModelViewer::RenderUI(GraphicsContext& Context)
     if (TemporalEffects::EnableTAA.RenderGui("TAA"))
         TemporalEffects::ClearHistory(Context);
 
-	SSAO::Enable.RenderGui("SSAO");
+    SSAO::Enable.RenderGui("SSAO");
     DepthOfField::Enable.RenderGui("Depth of Field");
-	MotionBlur::Enable.RenderGui("Motion Blur");
-	FXAA::Enable.RenderGui("FXAA");
+    MotionBlur::Enable.RenderGui("Motion Blur");
+    FXAA::Enable.RenderGui("FXAA");
 
     ImGui::Separator();
     PostEffects::EnableHDR.RenderGui("HDR / Tonemap");

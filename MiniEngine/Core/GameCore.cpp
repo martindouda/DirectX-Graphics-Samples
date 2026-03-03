@@ -23,10 +23,10 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 namespace GameCore
 {
     using namespace Graphics;
-
     bool gIsSupending = false;
-    ID3D12DescriptorHeap* g_ImguiHeap = nullptr; // Needed for ImGui font texture
     HWND g_hWnd = nullptr;
+
+    DescriptorHeap g_ImguiDescriptorHeap;
 
     void InitializeApplication(IGameApp& game)
     {
@@ -52,18 +52,14 @@ namespace GameCore
 
         ImGui_ImplWin32_Init(g_hWnd);
 
-        // Create a small heap for the ImGui font SRV
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = 1;
-        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        g_Device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_ImguiHeap));
+        g_ImguiDescriptorHeap.Create(L"ImGui Font Heap", D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1);
 
+		ID3D12DescriptorHeap* imguiHeapPointer = g_ImguiDescriptorHeap.GetHeapPointer();
         ImGui_ImplDX12_Init(g_Device, 3,
             DXGI_FORMAT_R11G11B10_FLOAT, // Default MiniEngine HDR Scene Color format
-            g_ImguiHeap,
-            g_ImguiHeap->GetCPUDescriptorHandleForHeapStart(),
-            g_ImguiHeap->GetGPUDescriptorHandleForHeapStart());
+            imguiHeapPointer,
+            imguiHeapPointer->GetCPUDescriptorHandleForHeapStart(),
+            imguiHeapPointer->GetGPUDescriptorHandleForHeapStart());
 
         game.Startup();
     }
@@ -76,8 +72,6 @@ namespace GameCore
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
-        if (g_ImguiHeap) g_ImguiHeap->Release();
-        g_ImguiHeap = nullptr;
 
         game.Cleanup();
         GameInput::Shutdown();
@@ -103,28 +97,38 @@ namespace GameCore
 
         PostEffects::Render();
 
+        // Miniengine UI
         GraphicsContext& UiContext = GraphicsContext::Begin(L"Render UI");
         UiContext.TransitionResource(g_OverlayBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
         UiContext.ClearColor(g_OverlayBuffer);
         UiContext.SetRenderTarget(g_OverlayBuffer.GetRTV());
         UiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
-
-        // App-specific UI (MiniEngine standard)
+        
         game.RenderUI(UiContext);
 
-        // --- ImGui Render Pass ---
-        ID3D12DescriptorHeap* heaps[] = { g_ImguiHeap };
-        UiContext.GetCommandList()->SetDescriptorHeaps(1, heaps);
-
-        ImGui::Render();
-        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), UiContext.GetCommandList());
-
-        // MiniEngine internal tuning display (rendered after ImGui)
         UiContext.SetRenderTarget(g_OverlayBuffer.GetRTV());
         UiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
         EngineTuning::Display(UiContext, 10.0f, 40.0f, 1900.0f, 1040.0f);
 
         UiContext.Finish();
+
+        // ImGui UI
+		GraphicsContext& ImGuiContext = GraphicsContext::Begin(L"ImGui Render");
+        ImGuiContext.TransitionResource(g_OverlayBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
+        ImGuiContext.SetRenderTarget(g_OverlayBuffer.GetRTV());
+        ImGuiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
+
+		game.RenderImGui(ImGuiContext);
+
+        ImGui::Render();
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), ImGuiContext.GetCommandList());
+
+        ImGuiContext.SetRenderTarget(g_OverlayBuffer.GetRTV());
+        ImGuiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
+        EngineTuning::Display(ImGuiContext, 10.0f, 40.0f, 1900.0f, 1040.0f);
+
+        ImGuiContext.Finish();
+
 
         Display::Present();
 
