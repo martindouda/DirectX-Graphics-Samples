@@ -148,8 +148,6 @@ void Sponza::Startup( Camera& Camera )
         }
     }
 
-    ParticleEffects::InitFromJSON(L"Sponza/particles.json");
-
     float modelRadius = Length(m_Model.GetBoundingBox().GetDimensions()) * 0.5f;
     const Vector3 eye = m_Model.GetBoundingBox().GetCenter() + Vector3(modelRadius * 0.5f, 0.0f, 0.0f);
     Camera.SetEyeAtUp( eye, Vector3(kZero), Vector3(kYUnitVector) );

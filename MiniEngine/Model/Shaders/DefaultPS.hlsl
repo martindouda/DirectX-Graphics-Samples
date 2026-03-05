@@ -55,6 +55,7 @@ struct VSOutput
 {
     float4 position : SV_POSITION;
     float3 normal : NORMAL;
+
 #ifndef NO_TANGENT_FRAME
     float4 tangent : TANGENT;
 #endif

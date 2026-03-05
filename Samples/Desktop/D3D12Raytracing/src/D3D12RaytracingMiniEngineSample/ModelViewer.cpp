@@ -693,7 +693,7 @@ void InitializeRaytracingStateObjects(const ModelH3D &model, UINT numMeshes)
    }
 }
 
-void D3D12RaytracingMiniEngineSample::Startup( void )
+void D3D12RaytracingMiniEngineSample::Startup()
 {
     MotionBlur::Enable = false;//true;
     TemporalEffects::EnableTAA = false;//true;
@@ -701,6 +701,7 @@ void D3D12RaytracingMiniEngineSample::Startup( void )
     PostEffects::EnableHDR = false;//true;
     PostEffects::EnableAdaptation = false;//true;
     SSAO::Enable = true;
+    FXAA::Enable = true;
 
     Renderer::Initialize();
 
@@ -942,28 +943,7 @@ void D3D12RaytracingMiniEngineSample::Update( float deltaT )
     else if(GameInput::IsFirstPressed(GameInput::kKey_7))
       rayTracingMode = RTM_REFLECTIONS;
     
-    static bool freezeCamera = false;
-    
-    if (GameInput::IsFirstPressed(GameInput::kKey_f))
-    {
-        freezeCamera = !freezeCamera;
-    }
-
-    if (GameInput::IsFirstPressed(GameInput::kKey_left))
-    {
-        m_CameraPosArrayCurrentPosition = (m_CameraPosArrayCurrentPosition + c_NumCameraPositions - 1) % c_NumCameraPositions;
-        SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
-    }
-    else if (GameInput::IsFirstPressed(GameInput::kKey_right))
-    {
-        m_CameraPosArrayCurrentPosition = (m_CameraPosArrayCurrentPosition + 1) % c_NumCameraPositions;
-        SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
-    }
-
-    if (!freezeCamera) 
-    {
-        m_CameraController->Update(deltaT);
-    }
+    m_CameraController->Update(deltaT);
 
     // We use viewport offsets to jitter sample positions from frame to frame (for TAA.)
     // D3D has a design quirk with fractional offsets such that the implicit scissor
@@ -1015,8 +995,6 @@ void D3D12RaytracingMiniEngineSample::RenderScene(void)
     const D3D12_VIEWPORT& viewport = m_MainViewport;
     const D3D12_RECT& scissor = m_MainScissor;
 
-    ParticleEffectManager::Update(gfxContext.GetComputeContext(), Graphics::GetFrameTime());
-
     Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor, skipDiffusePass, skipShadowMap);
 
     // Some systems generate a per-pixel velocity buffer to better track dynamic and skinned meshes.  Everything
@@ -1025,8 +1003,6 @@ void D3D12RaytracingMiniEngineSample::RenderScene(void)
     MotionBlur::GenerateCameraVelocityBuffer(gfxContext, m_Camera, true);
 
     TemporalEffects::ResolveImage(gfxContext);
-
-    ParticleEffectManager::Render(gfxContext, m_Camera, g_SceneColorBuffer, g_SceneDepthBuffer, g_LinearDepth[FrameIndex]);
 
     // Until I work out how to couple these two, it's "either-or".
     if (DepthOfField::Enable)

@@ -81,7 +81,6 @@ public:
     virtual void Bang( void ) override { m_IsExpanded = !m_IsExpanded; }
 
     virtual void SetValue( FILE*, const std::string& ) override {}
-    virtual bool RenderGui(const std::string& name) override { return false; }
 
     static VariableGroup sm_RootGroup;
 

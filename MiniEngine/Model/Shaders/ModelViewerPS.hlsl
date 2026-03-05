@@ -32,6 +32,7 @@ struct VSOutput
 	sample float3 normal : Normal;
 	sample float3 tangent : Tangent;
 	sample float3 bitangent : Bitangent;
+    uint primID : SV_PRIMITIVEID;
 };
 
 struct MRT
@@ -80,6 +81,8 @@ MRT main(VSOutput vsOutput)
 		);
 
 	mrt.Normal = normal;
-	mrt.Color = colorSum;
+	//mrt.Color = colorSum;
+	mrt.Color = frac(sin(float3(vsOutput.primID * 12.9898, vsOutput.primID * 78.233, vsOutput.primID * 45.164)) * 43758.5453);
+
 	return mrt;
 }

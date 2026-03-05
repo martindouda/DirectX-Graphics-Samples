@@ -33,7 +33,7 @@ public:
     virtual void Bang( void ) { m_ActionCallback(ActionType::Bang); }		// A Button
 
     virtual void DisplayValue( TextContext& ) const {}
-    virtual bool RenderGui(const std::string& name) { return false; };
+    virtual bool RenderGui(const std::string& name) { return name.length() > 0; };
     virtual std::string ToString( void ) const { return ""; }
     virtual void SetValue( FILE* file, const std::string& setting) = 0; //set value read from file
 
