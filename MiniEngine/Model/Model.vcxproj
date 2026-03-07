@@ -91,6 +91,7 @@
     <ClCompile Include="TextureConvert.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="Shaders\GateInference.hlsli" />
     <None Include="packages.config" />
     <None Include="Shaders\Common.hlsli" />
     <None Include="Shaders\FillLightGridCS.hlsli" />
@@ -98,6 +99,16 @@
     <None Include="Shaders\Lighting.hlsli" />
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="Shaders\GatePS.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\GateVS.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">Vertex</ShaderType>
+    </FxCompile>
     <FxCompile Include="Shaders\CutoutDepthPS.hlsl">
       <ShaderType>Pixel</ShaderType>
     </FxCompile>

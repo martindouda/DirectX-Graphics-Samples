@@ -37,7 +37,8 @@ namespace Sponza
         const D3D12_VIEWPORT& viewport,
         const D3D12_RECT& scissor,
         bool skipDiffusePass = false,
-        bool skipShadowMap = false );
+        bool skipShadowMap = false,
+        bool renderGate = false);
 
     const ModelH3D& GetModel();
 
@@ -46,4 +47,5 @@ namespace Sponza
     extern ExpVar m_AmbientIntensity;
     extern ExpVar m_SunLightIntensity;
 
+    extern ColorBuffer m_GateColorBuffer;
 }

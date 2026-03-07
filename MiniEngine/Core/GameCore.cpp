@@ -52,7 +52,7 @@ namespace GameCore
 
         ImGui_ImplWin32_Init(g_hWnd);
 
-        g_ImguiDescriptorHeap.Create(L"ImGui Font Heap", D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1);
+        g_ImguiDescriptorHeap.Create(L"ImGui Font Heap", D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 10);
 
 		ID3D12DescriptorHeap* imguiHeapPointer = g_ImguiDescriptorHeap.GetHeapPointer();
         ImGui_ImplDX12_Init(g_Device, 3,
@@ -119,7 +119,8 @@ namespace GameCore
         ImGuiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
 
 		game.RenderImGui(ImGuiContext);
-
+		ID3D12DescriptorHeap* imguiHeapPointer = g_ImguiDescriptorHeap.GetHeapPointer();
+        ImGuiContext.GetCommandList()->SetDescriptorHeaps(1, &imguiHeapPointer);
         ImGui::Render();
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), ImGuiContext.GetCommandList());
 

@@ -35,6 +35,8 @@
 #include "CompiledShaders/DepthViewerPS.h"
 #include "CompiledShaders/ModelViewerVS.h"
 #include "CompiledShaders/ModelViewerPS.h"
+#include "CompiledShaders/GateVS.h"
+#include "CompiledShaders/GatePS.h"
 
 using namespace Math;
 using namespace Graphics;
@@ -46,12 +48,29 @@ namespace Sponza
     enum eObjectFilter { kOpaque = 0x1, kCutout = 0x2, kTransparent = 0x4, kAll = 0xF, kNone = 0x0 };
     void RenderObjects( GraphicsContext& Context, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter = kAll );
 
+
     GraphicsPSO m_DepthPSO = { (L"Sponza: Depth PSO") };
     GraphicsPSO m_CutoutDepthPSO = { (L"Sponza: Cutout Depth PSO") };
     GraphicsPSO m_ModelPSO = { (L"Sponza: Color PSO") };
     GraphicsPSO m_CutoutModelPSO = { (L"Sponza: Cutout Color PSO") };
     GraphicsPSO m_ShadowPSO(L"Sponza: Shadow PSO");
     GraphicsPSO m_CutoutShadowPSO(L"Sponza: Cutout Shadow PSO");
+
+
+    // --- GATE ---
+	GraphicsPSO m_GatePSO = { L"Sponza: Gate PSO" };
+    RootSignature m_GateRootSig;
+    ColorBuffer m_GateColorBuffer;
+    struct GateFeature
+    {
+        XMFLOAT4 data[2];
+    };
+    StructuredBuffer m_GateFeatureBuffer;
+    ByteAddressBuffer m_GateFeatureGradientBuffer;
+    ByteAddressBuffer m_GateMLPBuffer;
+    ByteAddressBuffer m_GateMLPGradientBuffer;
+    // ------------
+
 
     ModelH3D m_Model;
     std::vector<bool> m_pMaterialIsCutout;
@@ -83,6 +102,8 @@ void Sponza::Startup( Camera& Camera )
         { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
     };
+
+
 
     // Depth-only (2x rate)
     m_DepthPSO.SetRootSignature(Renderer::m_RootSig);
@@ -128,8 +149,55 @@ void Sponza::Startup( Camera& Camera )
     m_CutoutModelPSO.SetRasterizerState(RasterizerTwoSided);
     m_CutoutModelPSO.Finalize();
 
+
+    // --- GATE ---
+    m_GateRootSig.Reset(3, 0);
+    m_GateRootSig[0].InitAsConstantBuffer(0); // b0: Camera Matrices
+    m_GateRootSig[1].InitAsBufferSRV(0);      // t0: Feature Buffer (StructuredBuffer)
+    m_GateRootSig[2].InitAsBufferSRV(1);      // t1: MLP Weights (ByteAddressBuffer)
+    m_GateRootSig.Finalize(L"Gate Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+    m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, ColorFormat);
+    m_GatePSO = m_ModelPSO;
+    m_GatePSO.SetRootSignature(m_GateRootSig);
+    m_GatePSO.SetVertexShader(g_pGateVS, sizeof(g_pGateVS));
+    m_GatePSO.SetPixelShader(g_pGatePS, sizeof(g_pGatePS));
+    m_GatePSO.SetRenderTargetFormats(1, &ColorFormat, DepthFormat);
+    m_GatePSO.Finalize();
+    // ------------
+
+
     ASSERT(m_Model.Load(L"Sponza/sponza.h3d"), "Failed to load model");
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
+
+
+    // --- GATE ---
+    // 2. ALLOCATE GATE FEATURE BUFFER (8 floats per vertex)
+    uint32_t VertexStride = m_Model.GetVertexStride();
+    uint32_t totalVertices = m_Model.GetVertexBuffer().SizeInBytes / VertexStride;
+
+    std::vector<GateFeature> initialFeatures(totalVertices);
+    for (uint32_t i = 0; i < totalVertices; ++i)
+    {
+        // Random 8-dimensional feature
+        initialFeatures[i].data[0] = XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+        initialFeatures[i].data[1] = XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+    }
+    m_GateFeatureBuffer.Create(L"GATE Feature Buffer", totalVertices, sizeof(GateFeature), initialFeatures.data());
+    m_GateFeatureGradientBuffer.Create(L"GATE Feature Gradients", totalVertices * 8, sizeof(float), nullptr);
+
+    // 3. ALLOCATE MLP WEIGHTS BUFFER (ByteAddressBuffer)
+    // 212 floats total: Layer 1 (8x16 + 16 = 144) + Layer 2 (16x4 + 4 = 68)
+    uint32_t numNetworkParameters = 212;
+    std::vector<float> initialWeights(numNetworkParameters);
+    for (uint32_t i = 0; i < numNetworkParameters; ++i) 
+    {
+        initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f; // Small random weights
+    }
+    m_GateMLPBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
+    m_GateMLPGradientBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), nullptr);
+    // ------------
+
 
     // The caller of this function can override which materials are considered cutouts
     m_pMaterialIsCutout.resize(m_Model.GetMaterialCount());
@@ -244,7 +312,8 @@ void Sponza::RenderScene(
     const D3D12_VIEWPORT& viewport,
     const D3D12_RECT& scissor,
     bool skipDiffusePass,
-    bool skipShadowMap)
+    bool skipShadowMap,
+    bool renderGateToViewport)
 {
     Renderer::UpdateGlobalDescriptors();
 
@@ -339,60 +408,90 @@ void Sponza::RenderScene(
         }
     }
 
-    if (!skipShadowMap)
+    if (!skipShadowMap && !SSAO::DebugDraw)
     {
-        if (!SSAO::DebugDraw)
+        pfnSetupGraphicsState();
         {
-            pfnSetupGraphicsState();
-            {
-                ScopedTimer _prof2(L"Render Shadow Map", gfxContext);
+            ScopedTimer _prof2(L"Render Shadow Map", gfxContext);
 
-                m_SunShadow.UpdateMatrix(-m_SunDirection, Vector3(0, -500.0f, 0), Vector3(ShadowDimX, ShadowDimY, ShadowDimZ),
-                    (uint32_t)g_ShadowBuffer.GetWidth(), (uint32_t)g_ShadowBuffer.GetHeight(), 16);
+            m_SunShadow.UpdateMatrix(-m_SunDirection, Vector3(0, -500.0f, 0), Vector3(ShadowDimX, ShadowDimY, ShadowDimZ),
+                (uint32_t)g_ShadowBuffer.GetWidth(), (uint32_t)g_ShadowBuffer.GetHeight(), 16);
 
-                g_ShadowBuffer.BeginRendering(gfxContext);
-                gfxContext.SetPipelineState(m_ShadowPSO);
-                RenderObjects(gfxContext, m_SunShadow.GetViewProjMatrix(), camera.GetPosition(), kOpaque);
-                gfxContext.SetPipelineState(m_CutoutShadowPSO);
-                RenderObjects(gfxContext, m_SunShadow.GetViewProjMatrix(), camera.GetPosition(), kCutout);
-                g_ShadowBuffer.EndRendering(gfxContext);
-            }
+            g_ShadowBuffer.BeginRendering(gfxContext);
+            gfxContext.SetPipelineState(m_ShadowPSO);
+            RenderObjects(gfxContext, m_SunShadow.GetViewProjMatrix(), camera.GetPosition(), kOpaque);
+            gfxContext.SetPipelineState(m_CutoutShadowPSO);
+            RenderObjects(gfxContext, m_SunShadow.GetViewProjMatrix(), camera.GetPosition(), kCutout);
+            g_ShadowBuffer.EndRendering(gfxContext);
         }
     }
 
-    if (!skipDiffusePass)
+    if (!skipDiffusePass && !SSAO::DebugDraw)
     {
-        if (!SSAO::DebugDraw)
+        if (SSAO::AsyncCompute)
         {
-            if (SSAO::AsyncCompute)
-            {
-                gfxContext.Flush();
-                pfnSetupGraphicsState();
+            gfxContext.Flush();
+            pfnSetupGraphicsState();
 
-                // Make the 3D queue wait for the Compute queue to finish SSAO
-                g_CommandManager.GetGraphicsQueue().StallForProducer(g_CommandManager.GetComputeQueue());
-            }
-
-            {
-                ScopedTimer _prof2(L"Render Color", gfxContext);
-
-                gfxContext.TransitionResource(g_SSAOFullScreen, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
-                gfxContext.SetDescriptorTable(Renderer::kCommonSRVs, Renderer::m_CommonTextures);
-                gfxContext.SetDynamicConstantBufferView(Renderer::kMaterialConstants, sizeof(psConstants), &psConstants);
-
-                {
-                    gfxContext.SetPipelineState(m_ModelPSO);
-                    gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_READ);
-                    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[]{ g_SceneColorBuffer.GetRTV(), g_SceneNormalBuffer.GetRTV() };
-                    gfxContext.SetRenderTargets(ARRAYSIZE(rtvs), rtvs, g_SceneDepthBuffer.GetDSV_DepthReadOnly());
-                    gfxContext.SetViewportAndScissor(viewport, scissor);
-                }
-                RenderObjects( gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kOpaque );
-
-                gfxContext.SetPipelineState(m_CutoutModelPSO);
-                RenderObjects( gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kCutout );
-            }
+            // Make the 3D queue wait for the Compute queue to finish SSAO
+            g_CommandManager.GetGraphicsQueue().StallForProducer(g_CommandManager.GetComputeQueue());
         }
+
+        {
+            ScopedTimer _prof2(L"Render Color", gfxContext);
+
+            gfxContext.TransitionResource(g_SSAOFullScreen, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+            gfxContext.SetDescriptorTable(Renderer::kCommonSRVs, Renderer::m_CommonTextures);
+            gfxContext.SetDynamicConstantBufferView(Renderer::kMaterialConstants, sizeof(psConstants), &psConstants);
+
+            {
+                gfxContext.SetPipelineState(m_ModelPSO);
+                gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_READ);
+                D3D12_CPU_DESCRIPTOR_HANDLE rtvs[]{ g_SceneColorBuffer.GetRTV(), g_SceneNormalBuffer.GetRTV() };
+                gfxContext.SetRenderTargets(ARRAYSIZE(rtvs), rtvs, g_SceneDepthBuffer.GetDSV_DepthReadOnly());
+                gfxContext.SetViewportAndScissor(viewport, scissor);
+            }
+            RenderObjects( gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kOpaque );
+
+            gfxContext.SetPipelineState(m_CutoutModelPSO);
+            RenderObjects( gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kCutout );
+        }
+    }
+
+    {
+        ScopedTimer _prof2(L"Render GATE Visualization", gfxContext);
+
+        ColorBuffer& targetBuffer = renderGateToViewport ? g_SceneColorBuffer : m_GateColorBuffer;
+
+        gfxContext.TransitionResource(targetBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
+        gfxContext.ClearColor(targetBuffer);
+
+        gfxContext.SetPipelineState(m_GatePSO);
+        gfxContext.SetRootSignature(m_GateRootSig);
+
+        Matrix4 wvp = camera.GetViewProjMatrix();
+        gfxContext.SetDynamicConstantBufferView(0, sizeof(wvp), &wvp);
+        gfxContext.SetBufferSRV(1, m_GateFeatureBuffer);
+        gfxContext.SetBufferSRV(2, m_GateMLPBuffer);
+
+        D3D12_CPU_DESCRIPTOR_HANDLE gateRTVs[] = { targetBuffer.GetRTV() };
+        gfxContext.SetRenderTargets(1, gateRTVs, g_SceneDepthBuffer.GetDSV_DepthReadOnly());
+        gfxContext.SetViewportAndScissor(viewport, scissor);
+
+        // 4. Draw the geometry cleanly, ignoring Sponza materials entirely
+        uint32_t VertexStride = m_Model.GetVertexStride();
+        for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
+        {
+            const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
+            
+            uint32_t indexCount = mesh.indexCount;
+            uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
+            uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
+
+            gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
+        }
+
+        gfxContext.TransitionResource(targetBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, true);
     }
 }

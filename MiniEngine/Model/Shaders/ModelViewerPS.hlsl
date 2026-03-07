@@ -81,8 +81,8 @@ MRT main(VSOutput vsOutput)
 		);
 
 	mrt.Normal = normal;
-	//mrt.Color = colorSum;
-	mrt.Color = frac(sin(float3(vsOutput.primID * 12.9898, vsOutput.primID * 78.233, vsOutput.primID * 45.164)) * 43758.5453);
+	mrt.Color = colorSum;
+	//mrt.Color = frac(sin(float3(vsOutput.primID * 12.9898, vsOutput.primID * 78.233, vsOutput.primID * 45.164)) * 43758.5453);
 
 	return mrt;
 }

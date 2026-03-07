@@ -130,7 +130,7 @@ public:
     virtual void CreateDerivedViews(void) override;
 
     ByteAddressBuffer& GetCounterBuffer(void) { return m_CounterBuffer; }
-
+     
     const D3D12_CPU_DESCRIPTOR_HANDLE& GetCounterSRV(CommandContext& Context);
     const D3D12_CPU_DESCRIPTOR_HANDLE& GetCounterUAV(CommandContext& Context);
 
