@@ -48,6 +48,8 @@
 #include "CompiledShaders/RayGenerationShadowsLib.h"
 #include "CompiledShaders/MissShadowsLib.h"
 
+#include "CompiledShaders/GateTrainingLib.h"
+
 #include "RaytracingHlslCompat.h"
 #include "ModelViewerRayTracing.h"
 
@@ -61,14 +63,22 @@ using namespace Graphics;
 using Microsoft::WRL::ComPtr;
 
 
-
+// --- GATE ---
 namespace Sponza
 {
     extern StructuredBuffer m_GateFeatureBuffer;
     extern ByteAddressBuffer m_GateFeatureGradientBuffer;
     extern ByteAddressBuffer m_GateMLPBuffer;
     extern ByteAddressBuffer m_GateMLPGradientBuffer;
+    
+    // NEW: Tell the raytracer that these exist too
+    extern StructuredBuffer m_GateFeatureAdamBuffer;
+    extern ByteAddressBuffer m_GateMLPAdamBuffer;
+    extern RootSignature m_OptimizerRootSig;
+    extern ComputePSO m_OptimizeFeaturesPSO;
+    extern ComputePSO m_OptimizeMLPPSO;
 }
+// ------------
 
 ComPtr<ID3D12Device5> g_pRaytracingDevice;
 
@@ -107,7 +117,7 @@ enum RaytracingTypes
     Shadows,
     DiffuseHitShader,
     Reflection,
-    //GateTraining,
+    GateTraining, // GATE
     NumTypes
 };
 
@@ -700,6 +710,23 @@ void InitializeRaytracingStateObjects(const ModelH3D &model, UINT numMeshes)
         g_RaytracingInputs[Reflection] = RaytracingDispatchRayInputs(*g_pRaytracingDevice.Get(), pReflectionPSO.Get(), pHitShaderTable.data(), shaderRecordSizeInBytes, (UINT)pHitShaderTable.size(), rayGenExportName, missExportName);
     }
 
+    // ===================================================================
+    // --- INSERT THIS NEW GATE TRAINING BLOCK HERE ---
+    // ===================================================================
+    {
+        // Replace all three stages with our unified training library
+        ReplaceDxilLibrary(pStateObjectDesc, g_pGateTrainingLib, rayGenExportName);
+        ReplaceDxilLibrary(pStateObjectDesc, g_pGateTrainingLib, hitExportName);
+        ReplaceDxilLibrary(pStateObjectDesc, g_pGateTrainingLib, missExportName);
+
+        ComPtr<ID3D12StateObject> pGateTrainingPSO;
+        g_pRaytracingDevice->CreateStateObject(pStateObjectDesc, IID_PPV_ARGS(&pGateTrainingPSO));
+
+        GetShaderTable(model, pGateTrainingPSO.Get(), pHitShaderTable.data());
+        g_RaytracingInputs[GateTraining] = RaytracingDispatchRayInputs(*g_pRaytracingDevice.Get(), pGateTrainingPSO.Get(), pHitShaderTable.data(), shaderRecordSizeInBytes, (UINT)pHitShaderTable.size(), rayGenExportName, missExportName);
+    }
+    // ===================================================================
+
     for (auto &raytracingPipelineState : g_RaytracingInputs)
     {
         WCHAR hitGroupExportNameClosestHitType[64];
@@ -1012,15 +1039,46 @@ void D3D12RaytracingMiniEngineSample::RenderScene()
 
 
     // --- GATE ---
-    /*if (rayTracingMode == RTM_GATE)
+    if (rayTracingMode == RTM_GATE)
     {
+        // 1. Raytracing Pass: Gathers gradients into the Gradient buffers
         RaytraceGateTraining(gfxContext, m_Camera);
 
-        // Transition the buffers back to SRV for the Display Pass
-        gfxContext.TransitionResource(Sponza::m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        gfxContext.TransitionResource(Sponza::m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        gfxContext.FlushResourceBarriers();
-    }*/
+        // 2. Optimizer Pass: Applies gradients and zeroes the buffers
+        ComputeContext& cptContext = gfxContext.GetComputeContext();
+        cptContext.SetRootSignature(Sponza::m_OptimizerRootSig);
+
+        // Define our hyperparameters
+        __declspec(align(16)) struct {
+            float lr, b1, b2, eps;
+            uint32_t tVerts, tMLP;
+        } optParams = {
+            0.01f, 0.9f, 0.999f, 1e-8f,
+            (uint32_t)(Sponza::m_GateFeatureBuffer.GetBufferSize() / 32), 212
+        };
+        cptContext.SetDynamicConstantBufferView(0, sizeof(optParams), &optParams);
+
+        // Bind all buffers to the Compute Shader
+        cptContext.SetBufferUAV(1, Sponza::m_GateFeatureBuffer);
+        cptContext.SetBufferUAV(2, Sponza::m_GateFeatureAdamBuffer);
+        cptContext.SetBufferUAV(3, Sponza::m_GateFeatureGradientBuffer);
+        cptContext.SetBufferUAV(4, Sponza::m_GateMLPBuffer);
+        cptContext.SetBufferUAV(5, Sponza::m_GateMLPAdamBuffer);
+        cptContext.SetBufferUAV(6, Sponza::m_GateMLPGradientBuffer);
+
+        // Dispatch Features (256 threads per group)
+        cptContext.SetPipelineState(Sponza::m_OptimizeFeaturesPSO);
+        cptContext.Dispatch((optParams.tVerts + 255) / 256, 1, 1);
+
+        // Dispatch MLP (212 parameters fits in 1 group of 256 threads)
+        cptContext.SetPipelineState(Sponza::m_OptimizeMLPPSO);
+        cptContext.Dispatch(1, 1, 1);
+
+        // 3. Transition buffers back to SRV so the Display Pass can read them!
+        cptContext.TransitionResource(Sponza::m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cptContext.TransitionResource(Sponza::m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cptContext.FlushResourceBarriers();
+    }
     // ------------
 
 
@@ -1333,7 +1391,7 @@ void D3D12RaytracingMiniEngineSample::RaytraceReflections(GraphicsContext& conte
     pRaytracingCommandList->DispatchRays(&dispatchRaysDesc);
 }
 
-/*void D3D12RaytracingMiniEngineSample::RaytraceGateTraining(GraphicsContext& context, const Math::Camera& camera)
+void D3D12RaytracingMiniEngineSample::RaytraceGateTraining(GraphicsContext& context, const Math::Camera& camera)
 {
     ScopedTimer _p0(L"GATE Training Pass", context);
 
@@ -1383,7 +1441,7 @@ void D3D12RaytracingMiniEngineSample::RaytraceReflections(GraphicsContext& conte
     D3D12_DISPATCH_RAYS_DESC dispatchRaysDesc = g_RaytracingInputs[GateTraining].GetDispatchRayDesc(dispatchWidth, dispatchHeight);
     pRaytracingCommandList->SetPipelineState1(g_RaytracingInputs[GateTraining].m_pPSO.Get());
     pRaytracingCommandList->DispatchRays(&dispatchRaysDesc);
-}*/
+}
 
 void D3D12RaytracingMiniEngineSample::RenderUI(class GraphicsContext& gfxContext)
 {

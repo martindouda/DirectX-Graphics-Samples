@@ -91,10 +91,10 @@
     <ClCompile Include="TextureConvert.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Shaders\GateInference.hlsli" />
     <None Include="packages.config" />
     <None Include="Shaders\Common.hlsli" />
     <None Include="Shaders\FillLightGridCS.hlsli" />
+    <None Include="Shaders\GateInference.hlsli" />
     <None Include="Shaders\LightGrid.hlsli" />
     <None Include="Shaders\Lighting.hlsli" />
   </ItemGroup>
@@ -176,6 +176,8 @@
     <FxCompile Include="Shaders\ModelViewerVS.hlsl">
       <ShaderType>Vertex</ShaderType>
     </FxCompile>
+    <FxCompile Include="Shaders\OptimizeFeaturesCS.hlsl" />
+    <FxCompile Include="Shaders\OptimizeMLPCS.hlsl" />
     <FxCompile Include="Shaders\SkyboxPS.hlsl">
       <ShaderType>Pixel</ShaderType>
     </FxCompile>

@@ -37,6 +37,8 @@
 #include "CompiledShaders/ModelViewerPS.h"
 #include "CompiledShaders/GateVS.h"
 #include "CompiledShaders/GatePS.h"
+#include "CompiledShaders/OptimizeFeaturesCS.h"
+#include "CompiledShaders/OptimizeMLPCS.h"
 
 using namespace Math;
 using namespace Graphics;
@@ -46,8 +48,7 @@ namespace Sponza
     void RenderLightShadows(GraphicsContext& gfxContext, const Camera& camera);
 
     enum eObjectFilter { kOpaque = 0x1, kCutout = 0x2, kTransparent = 0x4, kAll = 0xF, kNone = 0x0 };
-    void RenderObjects( GraphicsContext& Context, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter = kAll );
-
+    void RenderObjects(GraphicsContext& Context, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter = kAll);
 
     GraphicsPSO m_DepthPSO = { (L"Sponza: Depth PSO") };
     GraphicsPSO m_CutoutDepthPSO = { (L"Sponza: Cutout Depth PSO") };
@@ -56,21 +57,30 @@ namespace Sponza
     GraphicsPSO m_ShadowPSO(L"Sponza: Shadow PSO");
     GraphicsPSO m_CutoutShadowPSO(L"Sponza: Cutout Shadow PSO");
 
-
     // --- GATE ---
-	GraphicsPSO m_GatePSO = { L"Sponza: Gate PSO" };
+    GraphicsPSO m_GatePSO = { L"Sponza: Gate PSO" };
     RootSignature m_GateRootSig;
     ColorBuffer m_GateColorBuffer;
     struct GateFeature
     {
         XMFLOAT4 data[2];
     };
+
+    // Inference & Gradient Buffers
     StructuredBuffer m_GateFeatureBuffer;
     ByteAddressBuffer m_GateFeatureGradientBuffer;
     ByteAddressBuffer m_GateMLPBuffer;
     ByteAddressBuffer m_GateMLPGradientBuffer;
-    // ------------
 
+    // Adam Optimizer State Buffers
+    StructuredBuffer m_GateFeatureAdamBuffer;
+    ByteAddressBuffer m_GateMLPAdamBuffer;
+
+    // Optimizer PSOs & Root Signature
+    RootSignature m_OptimizerRootSig;
+    ComputePSO m_OptimizeFeaturesPSO = { L"Optimize Features PSO" };
+    ComputePSO m_OptimizeMLPPSO = { L"Optimize MLP PSO" };
+    // ------------
 
     ModelH3D m_Model;
     std::vector<bool> m_pMaterialIsCutout;
@@ -80,19 +90,18 @@ namespace Sponza
 
     ExpVar m_AmbientIntensity("Sponza/Lighting/Ambient Intensity", 0.1f, -16.0f, 16.0f, 0.1f);
     ExpVar m_SunLightIntensity("Sponza/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
-    NumVar m_SunOrientation("Sponza/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f );
-    NumVar m_SunInclination("Sponza/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f );
-    NumVar ShadowDimX("Sponza/Lighting/Shadow Dim X", 5000, 1000, 10000, 100 );
-    NumVar ShadowDimY("Sponza/Lighting/Shadow Dim Y", 3000, 1000, 10000, 100 );
-    NumVar ShadowDimZ("Sponza/Lighting/Shadow Dim Z", 3000, 1000, 10000, 100 );
+    NumVar m_SunOrientation("Sponza/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f);
+    NumVar m_SunInclination("Sponza/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f);
+    NumVar ShadowDimX("Sponza/Lighting/Shadow Dim X", 5000, 1000, 10000, 100);
+    NumVar ShadowDimY("Sponza/Lighting/Shadow Dim Y", 3000, 1000, 10000, 100);
+    NumVar ShadowDimZ("Sponza/Lighting/Shadow Dim Z", 3000, 1000, 10000, 100);
 }
 
-void Sponza::Startup( Camera& Camera )
+void Sponza::Startup(Camera& Camera)
 {
     DXGI_FORMAT ColorFormat = g_SceneColorBuffer.GetFormat();
     DXGI_FORMAT NormalFormat = g_SceneNormalBuffer.GetFormat();
     DXGI_FORMAT DepthFormat = g_SceneDepthBuffer.GetFormat();
-    //DXGI_FORMAT ShadowFormat = g_ShadowBuffer.GetFormat();
 
     D3D12_INPUT_ELEMENT_DESC vertElem[] =
     {
@@ -102,8 +111,6 @@ void Sponza::Startup( Camera& Camera )
         { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
     };
-
-
 
     // Depth-only (2x rate)
     m_DepthPSO.SetRootSignature(Renderer::m_RootSig);
@@ -141,8 +148,8 @@ void Sponza::Startup( Camera& Camera )
     m_ModelPSO.SetBlendState(BlendDisable);
     m_ModelPSO.SetDepthStencilState(DepthStateTestEqual);
     m_ModelPSO.SetRenderTargetFormats(2, formats, DepthFormat);
-    m_ModelPSO.SetVertexShader( g_pModelViewerVS, sizeof(g_pModelViewerVS) );
-    m_ModelPSO.SetPixelShader( g_pModelViewerPS, sizeof(g_pModelViewerPS) );
+    m_ModelPSO.SetVertexShader(g_pModelViewerVS, sizeof(g_pModelViewerVS));
+    m_ModelPSO.SetPixelShader(g_pModelViewerPS, sizeof(g_pModelViewerPS));
     m_ModelPSO.Finalize();
 
     m_CutoutModelPSO = m_ModelPSO;
@@ -166,13 +173,12 @@ void Sponza::Startup( Camera& Camera )
     m_GatePSO.Finalize();
     // ------------
 
-
     ASSERT(m_Model.Load(L"Sponza/sponza.h3d"), "Failed to load model");
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
 
 
-    // --- GATE ---
-    // 2. ALLOCATE GATE FEATURE BUFFER (8 floats per vertex)
+    // --- GATE BUFFERS ---
+    // 1. ALLOCATE GATE FEATURE BUFFER (8 floats per vertex)
     uint32_t VertexStride = m_Model.GetVertexStride();
     uint32_t totalVertices = m_Model.GetVertexBuffer().SizeInBytes / VertexStride;
 
@@ -184,18 +190,45 @@ void Sponza::Startup( Camera& Camera )
         initialFeatures[i].data[1] = XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
     }
     m_GateFeatureBuffer.Create(L"GATE Feature Buffer", totalVertices, sizeof(GateFeature), initialFeatures.data());
-    m_GateFeatureGradientBuffer.Create(L"GATE Feature Gradients", totalVertices * 8, sizeof(float), nullptr);
+    m_GateFeatureGradientBuffer.Create(L"GATE Feature Gradients", totalVertices * 8, 4, nullptr);
 
-    // 3. ALLOCATE MLP WEIGHTS BUFFER (ByteAddressBuffer)
-    // 212 floats total: Layer 1 (8x16 + 16 = 144) + Layer 2 (16x4 + 4 = 68)
+    // Feature Adam Buffer (Initialize with zeros)
+    std::vector<float> zeroFeatureAdam(totalVertices * 16, 0.0f);
+    m_GateFeatureAdamBuffer.Create(L"GATE Feature Adam", totalVertices, 64, zeroFeatureAdam.data());
+
+    // 2. ALLOCATE MLP WEIGHTS BUFFER
     uint32_t numNetworkParameters = 212;
     std::vector<float> initialWeights(numNetworkParameters);
-    for (uint32_t i = 0; i < numNetworkParameters; ++i) 
+    for (uint32_t i = 0; i < numNetworkParameters; ++i)
     {
-        initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f; // Small random weights
+        initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
     }
-    m_GateMLPBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
-    m_GateMLPGradientBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), nullptr);
+    m_GateMLPBuffer.Create(L"MLPZen Parameters", numNetworkParameters, 4, initialWeights.data());
+    m_GateMLPGradientBuffer.Create(L"MLPZen Gradients", numNetworkParameters, 4, nullptr);
+
+    // MLP Adam Buffer (Initialize with zeros)
+    std::vector<float> zeroMLPAdam(numNetworkParameters * 2, 0.0f);
+    m_GateMLPAdamBuffer.Create(L"MLP Adam", numNetworkParameters * 2, 4, zeroMLPAdam.data());
+
+    // 3. CREATE OPTIMIZER ROOT SIGNATURE
+    m_OptimizerRootSig.Reset(7, 0);
+    m_OptimizerRootSig[0].InitAsConstantBuffer(0); // b0: Params
+    m_OptimizerRootSig[1].InitAsBufferUAV(0);      // u0: Feature Buffer
+    m_OptimizerRootSig[2].InitAsBufferUAV(1);      // u1: Feature Adam
+    m_OptimizerRootSig[3].InitAsBufferUAV(2);      // u2: Feature Gradients
+    m_OptimizerRootSig[4].InitAsBufferUAV(3);      // u3: MLP Buffer
+    m_OptimizerRootSig[5].InitAsBufferUAV(4);      // u4: MLP Adam
+    m_OptimizerRootSig[6].InitAsBufferUAV(5);      // u5: MLP Gradients
+    m_OptimizerRootSig.Finalize(L"Optimizer Root Sig");
+
+    // 4. CREATE OPTIMIZER PSOs
+    m_OptimizeFeaturesPSO.SetRootSignature(m_OptimizerRootSig);
+    m_OptimizeFeaturesPSO.SetComputeShader(g_pOptimizeFeaturesCS, sizeof(g_pOptimizeFeaturesCS));
+    m_OptimizeFeaturesPSO.Finalize();
+
+    m_OptimizeMLPPSO.SetRootSignature(m_OptimizerRootSig);
+    m_OptimizeMLPPSO.SetComputeShader(g_pOptimizeMLPCS, sizeof(g_pOptimizeMLPCS));
+    m_OptimizeMLPPSO.Finalize();
     // ------------
 
 
@@ -218,7 +251,7 @@ void Sponza::Startup( Camera& Camera )
 
     float modelRadius = Length(m_Model.GetBoundingBox().GetDimensions()) * 0.5f;
     const Vector3 eye = m_Model.GetBoundingBox().GetCenter() + Vector3(modelRadius * 0.5f, 0.0f, 0.0f);
-    Camera.SetEyeAtUp( eye, Vector3(kZero), Vector3(kYUnitVector) );
+    Camera.SetEyeAtUp(eye, Vector3(kZero), Vector3(kYUnitVector));
 
     Lighting::CreateRandomLights(m_Model.GetBoundingBox().GetMin(), m_Model.GetBoundingBox().GetMax());
 }
@@ -228,14 +261,14 @@ const ModelH3D& Sponza::GetModel()
     return Sponza::m_Model;
 }
 
-void Sponza::Cleanup( void )
+void Sponza::Cleanup(void)
 {
     m_Model.Clear();
     Lighting::Shutdown();
     TextureManager::Shutdown();
 }
 
-void Sponza::RenderObjects( GraphicsContext& gfxContext, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter )
+void Sponza::RenderObjects(GraphicsContext& gfxContext, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter)
 {
     struct VSConstants
     {
@@ -263,8 +296,8 @@ void Sponza::RenderObjects( GraphicsContext& gfxContext, const Matrix4& ViewProj
 
         if (mesh.materialIndex != materialIdx)
         {
-            if ( m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kCutout) ||
-                !m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kOpaque) )
+            if (m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kCutout) ||
+                !m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kOpaque))
                 continue;
 
             materialIdx = mesh.materialIndex;
@@ -294,7 +327,6 @@ void Sponza::RenderLightShadows(GraphicsContext& gfxContext, const Camera& camer
         gfxContext.SetPipelineState(m_CutoutShadowPSO);
         RenderObjects(gfxContext, m_LightShadowMatrix[LightIndex], camera.GetPosition(), kCutout);
     }
-    //m_LightShadowTempBuffer.EndRendering(gfxContext);
 
     gfxContext.TransitionResource(m_LightShadowTempBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE);
     gfxContext.TransitionResource(m_LightShadowArray, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -323,7 +355,7 @@ void Sponza::RenderScene(
     float sintheta = sinf(m_SunOrientation);
     float cosphi = cosf(m_SunInclination * 3.14159f * 0.5f);
     float sinphi = sinf(m_SunInclination * 3.14159f * 0.5f);
-    m_SunDirection = Normalize(Vector3( costheta * cosphi, sinphi, sintheta * cosphi ));
+    m_SunDirection = Normalize(Vector3(costheta * cosphi, sinphi, sintheta * cosphi));
 
     __declspec(align(16)) struct
     {
@@ -336,7 +368,7 @@ void Sponza::RenderScene(
         uint32_t TileCount[4];
         uint32_t FirstLightIndex[4];
 
-		uint32_t FrameIndexMod2;
+        uint32_t FrameIndexMod2;
     } psConstants;
 
     psConstants.sunDirection = m_SunDirection;
@@ -349,17 +381,16 @@ void Sponza::RenderScene(
     psConstants.TileCount[1] = Math::DivideByMultiple(g_SceneColorBuffer.GetHeight(), Lighting::LightGridDim);
     psConstants.FirstLightIndex[0] = Lighting::m_FirstConeLight;
     psConstants.FirstLightIndex[1] = Lighting::m_FirstConeShadowedLight;
-	psConstants.FrameIndexMod2 = FrameIndex;
+    psConstants.FrameIndexMod2 = FrameIndex;
 
-    // Set the default state for command lists
     auto& pfnSetupGraphicsState = [&](void)
-    {
-        gfxContext.SetRootSignature(Renderer::m_RootSig);
-        gfxContext.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
-        gfxContext.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        gfxContext.SetIndexBuffer(m_Model.GetIndexBuffer());
-        gfxContext.SetVertexBuffer(0, m_Model.GetVertexBuffer());
-    };
+        {
+            gfxContext.SetRootSignature(Renderer::m_RootSig);
+            gfxContext.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
+            gfxContext.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            gfxContext.SetIndexBuffer(m_Model.GetIndexBuffer());
+            gfxContext.SetVertexBuffer(0, m_Model.GetVertexBuffer());
+        };
 
     pfnSetupGraphicsState();
 
@@ -379,7 +410,7 @@ void Sponza::RenderScene(
                 gfxContext.SetDepthStencilTarget(g_SceneDepthBuffer.GetDSV());
                 gfxContext.SetViewportAndScissor(viewport, scissor);
             }
-            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kOpaque );
+            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kOpaque);
         }
 
         {
@@ -387,7 +418,7 @@ void Sponza::RenderScene(
             {
                 gfxContext.SetPipelineState(m_CutoutDepthPSO);
             }
-            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kCutout );
+            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kCutout);
         }
     }
 
@@ -432,8 +463,6 @@ void Sponza::RenderScene(
         {
             gfxContext.Flush();
             pfnSetupGraphicsState();
-
-            // Make the 3D queue wait for the Compute queue to finish SSAO
             g_CommandManager.GetGraphicsQueue().StallForProducer(g_CommandManager.GetComputeQueue());
         }
 
@@ -452,10 +481,10 @@ void Sponza::RenderScene(
                 gfxContext.SetRenderTargets(ARRAYSIZE(rtvs), rtvs, g_SceneDepthBuffer.GetDSV_DepthReadOnly());
                 gfxContext.SetViewportAndScissor(viewport, scissor);
             }
-            RenderObjects( gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kOpaque );
+            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kOpaque);
 
             gfxContext.SetPipelineState(m_CutoutModelPSO);
-            RenderObjects( gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kCutout );
+            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), Sponza::kCutout);
         }
     }
 
@@ -479,12 +508,12 @@ void Sponza::RenderScene(
         gfxContext.SetRenderTargets(1, gateRTVs, g_SceneDepthBuffer.GetDSV_DepthReadOnly());
         gfxContext.SetViewportAndScissor(viewport, scissor);
 
-        // 4. Draw the geometry cleanly, ignoring Sponza materials entirely
+        // Draw the geometry cleanly, ignoring Sponza materials entirely
         uint32_t VertexStride = m_Model.GetVertexStride();
         for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
         {
             const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
-            
+
             uint32_t indexCount = mesh.indexCount;
             uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
             uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
