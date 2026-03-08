@@ -1,3 +1,5 @@
+// ModelViewer.cpp
+
 //*********************************************************
 //
 // Copyright (c) Microsoft. All rights reserved.
@@ -1046,6 +1048,11 @@ void D3D12RaytracingMiniEngineSample::RenderScene()
 
         // 2. Optimizer Pass: Applies gradients and zeroes the buffers
         ComputeContext& cptContext = gfxContext.GetComputeContext();
+
+        // Force the Compute Shader to wait until the Raytracer is 100% finished writing
+        cptContext.InsertUAVBarrier(Sponza::m_GateFeatureGradientBuffer);
+        cptContext.InsertUAVBarrier(Sponza::m_GateMLPGradientBuffer);
+
         cptContext.SetRootSignature(Sponza::m_OptimizerRootSig);
 
         // Define our hyperparameters

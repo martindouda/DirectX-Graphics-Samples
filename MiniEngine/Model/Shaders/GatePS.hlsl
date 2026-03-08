@@ -1,3 +1,5 @@
+// GatePS.hlsl
+
 // --- Architecture Macros (8 -> 16 -> 4) ---
 #define MAX_NEURON_QUARTETS_PER_LAYER 4 // Max 16 neurons / 4
 #define HIDDEN_LAYER 1
