@@ -70,6 +70,8 @@ namespace Sponza
     ByteAddressBuffer m_GateFeatureGradientBuffer;
     ByteAddressBuffer m_GateMLPBuffer;
     ByteAddressBuffer m_GateMLPGradientBuffer;
+
+    StructuredBuffer m_VertexMaterialMap;
     // ------------
 
 
@@ -169,20 +171,29 @@ void Sponza::Startup( Camera& Camera )
     // ------------
 
     // Variables to add to your Sponza namespace
-    RootSignature m_EncodeUVRootSig;
-    ComputePSO m_EncodeUVPSO(L"Sponza: Encode UVs CS");
+    RootSignature m_EncodeColorRootSig;
+    ComputePSO m_EncodeColorPSO(L"Sponza: Encode UVs CS");
 
     // 1. Root Signature setup
-    m_EncodeUVRootSig.Reset(3, 0);
-    m_EncodeUVRootSig[0].InitAsConstants(0, 4);       // b0: TotalVertices, VertexStride, UVOffset
-    m_EncodeUVRootSig[1].InitAsBufferSRV(0);          // t0: Vertex Buffer
-    m_EncodeUVRootSig[2].InitAsBufferUAV(0);          // u0: RW Feature Buffer
-    m_EncodeUVRootSig.Finalize(L"Encode UV Root Sig");
+    m_EncodeColorRootSig.Reset(5, 1); // 5 Parameters, 1 Static Sampler
+    m_EncodeColorRootSig[0].InitAsConstants(0, 3);    // b0: TotalVertices, VertexStride, UVOffset
+    m_EncodeColorRootSig[1].InitAsBufferSRV(0);       // t0: Vertex Buffer
+    m_EncodeColorRootSig[2].InitAsBufferSRV(1);       // t1: Vertex Material Map
+    m_EncodeColorRootSig[3].InitAsBufferUAV(0);       // u0: RW Feature Buffer
+
+    // Unbounded Descriptor Table for textures (mapped to space1 in HLSL)
+    m_EncodeColorRootSig[4].InitAsDescriptorTable(1);
+    m_EncodeColorRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
+
+    // Initialize the 1 static sampler
+    m_EncodeColorRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
+
+    m_EncodeColorRootSig.Finalize(L"Encode UV Root Sig");
 
     // 2. PSO setup (assuming g_pEncodeUV_CS is your compiled shader byte array)
-    m_EncodeUVPSO.SetRootSignature(m_EncodeUVRootSig);
-    m_EncodeUVPSO.SetComputeShader(g_pEncodeUVCS, sizeof(g_pEncodeUVCS));
-    m_EncodeUVPSO.Finalize();
+    m_EncodeColorPSO.SetRootSignature(m_EncodeColorRootSig);
+    m_EncodeColorPSO.SetComputeShader(g_pEncodeUVCS, sizeof(g_pEncodeUVCS));
+    m_EncodeColorPSO.Finalize();
 
 
 
@@ -217,32 +228,45 @@ void Sponza::Startup( Camera& Camera )
     m_GateMLPGradientBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), nullptr);
     // ------------
 
+    std::vector<uint32_t> vertexMaterials(totalVertices, 0);
+    for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
+    {
+        const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
+        uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
+
+        for (uint32_t v = 0; v < mesh.vertexCount; ++v)
+        {
+            vertexMaterials[baseVertex + v] = mesh.materialIndex;
+        }
+    }
+    m_VertexMaterialMap.Create(L"Vertex Material Map", totalVertices, sizeof(uint32_t), vertexMaterials.data());
 
     // Calculate the UV offset based on your D3D12_INPUT_ELEMENT_DESC
     // POSITION is RGB32_FLOAT (12 bytes), so TEXCOORD starts at byte 12.
+    ComputeContext& cptContext = ComputeContext::Begin(L"Encode Colors into Features");
+
+    cptContext.SetRootSignature(m_EncodeColorRootSig);
+    cptContext.SetPipelineState(m_EncodeColorPSO);
+    cptContext.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
+
+    // Bind Constants
     uint32_t uvOffset = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].offset;
-    uint32_t uvFormat = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].format;
-    uint32_t isHalfFloat = (uvFormat == DXGI_FORMAT_R16G16_FLOAT) ? 1 : 0;
+    cptContext.SetConstants(0, totalVertices, VertexStride, uvOffset);
 
-
-    ComputeContext& cptContext = ComputeContext::Begin(L"Encode UVs into Features");
-
-    cptContext.SetRootSignature(m_EncodeUVRootSig);
-    cptContext.SetPipelineState(m_EncodeUVPSO);
-    // Bind Constants (TotalVertices, VertexStride, UVOffset)
-
-    cptContext.SetConstants(0, totalVertices, VertexStride, uvOffset, isHalfFloat);
-    // Bind Vertex Buffer as SRV (ByteAddressBuffer)
+    // Bind Buffers via GPU Virtual Addresses
     cptContext.GetCommandList()->SetComputeRootShaderResourceView(1, m_Model.GetVertexBuffer().BufferLocation);
-    // Bind Feature Buffer as UAV
-    cptContext.SetBufferUAV(2, m_GateFeatureBuffer);
-    // Dispatch (thread groups = total vertices / 64)
+    cptContext.GetCommandList()->SetComputeRootShaderResourceView(2, m_VertexMaterialMap.GetGpuVirtualAddress());
+    cptContext.SetBufferUAV(3, m_GateFeatureBuffer);
+
+    // NEW: Bind the ENTIRE texture heap to Root Parameter 4!
+    cptContext.SetDescriptorTable(4, m_Model.GetSRVs(0));
+
+    // One single dispatch for the entire scene!
     uint32_t threadGroups = Math::DivideByMultiple(totalVertices, 64);
     cptContext.Dispatch(threadGroups, 1, 1);
-    // Ensure the compute shader finishes writing before the graphics queue tries to read it
-    cptContext.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    cptContext.Finish(true); // 'true' stalls the CPU until GPU is done, good for initialization
+    cptContext.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    cptContext.Finish(true);
 
 
 

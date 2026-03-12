@@ -17,8 +17,8 @@ struct VSOutput
 
 float4 main(VSOutput input) : SV_TARGET
 {
-    float2 uv = frac(input.f0.xy);
-    return float4(uv.x, uv.y, 0.0f, 1.0f);
+    float3 color = input.f0.xyz;
+    return float4(color.x, color.y, color.z, 1.0f);
 
 
     float4 activationsA[MAX_NEURON_QUARTETS_PER_LAYER];

@@ -714,6 +714,7 @@ void D3D12RaytracingMiniEngineSample::Startup()
 {
     MotionBlur::Enable = false;//true;
     TemporalEffects::EnableTAA = false;//true;
+
     FXAA::Enable = false;
     PostEffects::EnableHDR = false;//true;
     PostEffects::EnableAdaptation = false;//true;
