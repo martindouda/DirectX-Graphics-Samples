@@ -43,12 +43,22 @@ cbuffer RootConstantsCB : register(b0)
     float adamBeta2;
     float adamBeta1T; // Beta1^t
     float adamBeta2T; // Beta2^t
+    uint VertexStride;
+    uint uvOffset;
 };
 
 // Sponza Geometry & Target
-ByteAddressBuffer IndexBuffer : register(t0);
+struct GlobalTriangle
+{
+    uint i0;
+    uint i1;
+    uint i2;
+    uint materialIdx;
+};
+
+StructuredBuffer<GlobalTriangle> TriangleBuffer : register(t0);
 ByteAddressBuffer VertexUVBuffer : register(t1);
-Texture2D<float4> GroundTruthTexture : register(t2);
+Texture2D<float4> BindlessTextures[] : register(t0, space1);
 SamplerState LinearSampler : register(s0);
 
 // GATE Features (Per-Vertex)

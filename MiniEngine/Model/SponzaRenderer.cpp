@@ -38,6 +38,9 @@
 #include "CompiledShaders/GateVS.h"
 #include "CompiledShaders/GatePS.h"
 #include "CompiledShaders/EncodeUVCS.h"
+#include "CompiledShaders/GateBackpropCS.h"
+#include "CompiledShaders/GateOptimizeFeaturesCS.h"
+#include "CompiledShaders/GateOptimizeMLPCS.h"
 
 using namespace Math;
 using namespace Graphics;
@@ -62,10 +65,7 @@ namespace Sponza
 	GraphicsPSO m_GatePSO = { L"Sponza: Gate PSO" };
     RootSignature m_GateRootSig;
     ColorBuffer m_GateColorBuffer;
-    struct GateFeature
-    {
-        XMFLOAT4 data[2];
-    };
+
     StructuredBuffer m_GateFeatureBuffer;
     ByteAddressBuffer m_GateFeatureGradientBuffer;
     ByteAddressBuffer m_GateMLPBuffer;
@@ -80,6 +80,18 @@ namespace Sponza
     };
 
     StructuredBuffer m_GlobalTriangleBuffer; // Add to Sponza namespace
+
+    ByteAddressBuffer m_GateFeatureAdamBuffer;
+    ByteAddressBuffer m_GateMLPAdamBuffer;
+
+    // Add PSOs for the training shaders
+    RootSignature m_GateTrainRootSig;
+    ComputePSO m_GateBackpropPSO(L"GATE: Backprop");
+    ComputePSO m_GateOptMLPPSO(L"GATE: Optimize MLP");
+    ComputePSO m_GateOptFeatPSO(L"GATE: Optimize Features");
+
+    uint32_t m_TotalTriangles = 0;
+    uint32_t m_TotalVertices = 0;
     // ------------
 
 
@@ -213,17 +225,18 @@ void Sponza::Startup( Camera& Camera )
     // --- GATE ---
     // 2. ALLOCATE GATE FEATURE BUFFER (8 floats per vertex)
     uint32_t VertexStride = m_Model.GetVertexStride();
-    uint32_t totalVertices = m_Model.GetVertexBuffer().SizeInBytes / VertexStride;
+    m_TotalVertices = m_Model.GetVertexBuffer().SizeInBytes / VertexStride;
 
-    std::vector<GateFeature> initialFeatures(totalVertices);
-    for (uint32_t i = 0; i < totalVertices; ++i)
+    struct GateFeature { XMFLOAT4 data[2]; };
+    std::vector<GateFeature> initialFeatures(m_TotalVertices);
+    for (uint32_t i = 0; i < m_TotalVertices; ++i)
     {
         // Random 8-dimensional feature
         initialFeatures[i].data[0] = XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         initialFeatures[i].data[1] = XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
     }
-    m_GateFeatureBuffer.Create(L"GATE Feature Buffer", totalVertices, sizeof(GateFeature), initialFeatures.data());
-    m_GateFeatureGradientBuffer.Create(L"GATE Feature Gradients", totalVertices * 8, sizeof(float), nullptr);
+    m_GateFeatureBuffer.Create(L"GATE Feature Buffer", m_TotalVertices, sizeof(GateFeature), initialFeatures.data());
+    m_GateFeatureGradientBuffer.Create(L"GATE Feature Gradients", m_TotalVertices * 8, sizeof(float), nullptr);
 
     // 3. ALLOCATE MLP WEIGHTS BUFFER (ByteAddressBuffer)
     // 212 floats total: Layer 1 (8x16 + 16 = 144) + Layer 2 (16x4 + 4 = 68)
@@ -237,7 +250,7 @@ void Sponza::Startup( Camera& Camera )
     m_GateMLPGradientBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), nullptr);
     // ------------
 
-    std::vector<uint32_t> vertexMaterials(totalVertices, 0);
+    std::vector<uint32_t> vertexMaterials(m_TotalVertices, 0);
     for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
     {
         const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
@@ -248,15 +261,15 @@ void Sponza::Startup( Camera& Camera )
             vertexMaterials[baseVertex + v] = mesh.materialIndex;
         }
     }
-    m_VertexMaterialMap.Create(L"Vertex Material Map", totalVertices, sizeof(uint32_t), vertexMaterials.data());
+    m_VertexMaterialMap.Create(L"Vertex Material Map", m_TotalVertices, sizeof(uint32_t), vertexMaterials.data());
 
-    uint32_t totalTriangles = 0;
+    m_TotalTriangles = 0;
     for (uint32_t i = 0; i < m_Model.GetMeshCount(); ++i)
     {
-        totalTriangles += m_Model.GetMesh(i).indexCount / 3;
+        m_TotalTriangles += m_Model.GetMesh(i).indexCount / 3;
     }
 
-    std::vector<GlobalTriangle> globalTris(totalTriangles);
+    std::vector<GlobalTriangle> globalTris(m_TotalTriangles);
     uint32_t triOffset = 0;
 
     // Grab the raw CPU index array we just exposed
@@ -285,14 +298,63 @@ void Sponza::Startup( Camera& Camera )
             triOffset++;
         }
     }
-
     // Allocate the buffer for the GPU!
-    // (Make sure to add 'StructuredBuffer m_GlobalTriangleBuffer;' to your Sponza namespace)
-    m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", totalTriangles, sizeof(GlobalTriangle), globalTris.data());
+    m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
+
+
+    // 4. ALLOCATE ADAM BUFFERS
+    // Adam needs 2 float4s (mean, variance) per parameter. 
+    // Features: TotalVertices * 2 quartets (f0, f1)
+    // MLP: 53 quartets
+    struct AdamData { XMFLOAT4 mean; XMFLOAT4 variance; };
+    std::vector<AdamData> initialFeatureAdam(m_TotalVertices * 2, { {0,0,0,0}, {0,0,0,0} });
+    std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0} });
+    m_GateFeatureAdamBuffer.Create(L"Feature Adam Buffer", m_TotalVertices * 2, sizeof(AdamData), initialFeatureAdam.data());
+    m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
+
+
+    // 5. TRAINING ROOT SIGNATURE
+    m_GateTrainRootSig.Reset(10, 1);
+
+    // b0: Constants (10 DWORDs: step, tris, lr, eps, b1, b2, b1T, b2T, stride, uvOffset)
+    m_GateTrainRootSig[0].InitAsConstants(0, 10);
+
+    // SRVs
+    m_GateTrainRootSig[1].InitAsBufferSRV(0); // t0: TriangleBuffer
+    m_GateTrainRootSig[2].InitAsBufferSRV(1); // t1: VertexBuffer
+
+    // t2: Bindless Material Textures (Space 1)
+    m_GateTrainRootSig[3].InitAsDescriptorTable(1);
+    m_GateTrainRootSig[3].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
+
+    // UAVs
+    m_GateTrainRootSig[4].InitAsBufferUAV(0); // u0: Feature Buffer
+    m_GateTrainRootSig[5].InitAsBufferUAV(1); // u1: Feature Gradients
+    m_GateTrainRootSig[6].InitAsBufferUAV(2); // u2: Feature Adam
+    m_GateTrainRootSig[7].InitAsBufferUAV(3); // u3: MLP Buffer
+    m_GateTrainRootSig[8].InitAsBufferUAV(4); // u4: MLP Gradients
+    m_GateTrainRootSig[9].InitAsBufferUAV(5); // u5: MLP Adam
+
+    m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
+    m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
+
+    // Initialize the 3 PSOs (Assuming you compiled the shaders)
+    m_GateBackpropPSO.SetRootSignature(m_GateTrainRootSig);
+    m_GateBackpropPSO.SetComputeShader(g_pGateBackpropCS, sizeof(g_pGateBackpropCS));
+    m_GateBackpropPSO.Finalize();
+
+    m_GateOptMLPPSO.SetRootSignature(m_GateTrainRootSig);
+    m_GateOptMLPPSO.SetComputeShader(g_pGateOptimizeMLPCS, sizeof(g_pGateOptimizeMLPCS));
+    m_GateOptMLPPSO.Finalize();
+
+    m_GateOptFeatPSO.SetRootSignature(m_GateTrainRootSig);
+    m_GateOptFeatPSO.SetComputeShader(g_pGateOptimizeFeaturesCS, sizeof(g_pGateOptimizeFeaturesCS));
+    m_GateOptFeatPSO.Finalize();
+
 
     // Calculate the UV offset based on your D3D12_INPUT_ELEMENT_DESC
     // POSITION is RGB32_FLOAT (12 bytes), so TEXCOORD starts at byte 12.
-    ComputeContext& cptContext = ComputeContext::Begin(L"Encode Colors into Features");
+    /*ComputeContext& cptContext = ComputeContext::Begin(L"Encode Colors into Features");
 
     cptContext.SetRootSignature(m_EncodeColorRootSig);
     cptContext.SetPipelineState(m_EncodeColorPSO);
@@ -316,7 +378,7 @@ void Sponza::Startup( Camera& Camera )
     cptContext.Dispatch(threadGroups, 1, 1);
 
     cptContext.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    cptContext.Finish(true);
+    cptContext.Finish(true);*/
 
 
 
@@ -438,6 +500,86 @@ void Sponza::RenderScene(
     int  numMeshesRendered)
 {
     Renderer::UpdateGlobalDescriptors();
+
+
+    // --- GATE LIVE TRAINING LOOP ---
+    static uint32_t trainingStep = 1;
+    static float adamBeta1T = 0.9f;
+    static float adamBeta2T = 0.999f;
+
+    // Hyperparameters
+    float learningRate = 0.001f;
+    float adamEpsilon = 1e-8f;
+    float adamBeta1 = 0.9f;
+    float adamBeta2 = 0.999f;
+    uint32_t uvOffset = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].offset;
+    uint32_t VertexStride = m_Model.GetVertexStride();
+
+    ComputeContext& trainCtx = ComputeContext::Begin(L"GATE Training");
+
+    trainCtx.SetRootSignature(m_GateTrainRootSig);
+    trainCtx.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
+
+    // Bind Constants
+    struct TrainingConstants {
+        uint32_t trainingStep;
+        uint32_t totalTriangles;
+        float learningRate;
+        float adamEpsilon;
+        float adamBeta1;
+        float adamBeta2;
+        float adamBeta1T;
+        float adamBeta2T;
+        uint32_t VertexStride;
+        uint32_t uvOffset;
+    } cb = {
+        trainingStep, m_TotalTriangles, learningRate, adamEpsilon,
+        adamBeta1, adamBeta2, adamBeta1T, adamBeta2T, VertexStride, uvOffset
+    };
+
+    // 2. Upload them all at once! (Root Index 0, 10 DWORDs, pointer to data)
+    trainCtx.SetConstantArray(0, 10, &cb);
+
+    // Bind SRVs
+    trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
+    trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model.GetVertexBuffer().BufferLocation);
+    trainCtx.SetDescriptorTable(3, m_Model.GetSRVs(0)); // Bindless Textures
+
+    // Bind UAVs
+    trainCtx.SetBufferUAV(4, m_GateFeatureBuffer);
+    trainCtx.SetBufferUAV(5, m_GateFeatureGradientBuffer);
+    trainCtx.SetBufferUAV(6, m_GateFeatureAdamBuffer);
+    trainCtx.SetBufferUAV(7, m_GateMLPBuffer);
+    trainCtx.SetBufferUAV(8, m_GateMLPGradientBuffer);
+    trainCtx.SetBufferUAV(9, m_GateMLPAdamBuffer);
+
+    // 1. BACKPROP PASS (E.g., process 65,536 random triangles per frame)
+    trainCtx.SetPipelineState(m_GateBackpropPSO);
+    trainCtx.Dispatch(1024, 1, 1);
+
+    // Barrier: Wait for all gradients to finish accumulating
+    trainCtx.InsertUAVBarrier(m_GateFeatureGradientBuffer);
+    trainCtx.InsertUAVBarrier(m_GateMLPGradientBuffer);
+
+    // 2. OPTIMIZE MLP PASS
+    trainCtx.SetPipelineState(m_GateOptMLPPSO);
+    trainCtx.Dispatch(1, 1, 1); // 64 threads is enough for 53 parameters
+
+    // 3. OPTIMIZE FEATURES PASS
+    trainCtx.SetPipelineState(m_GateOptFeatPSO);
+    trainCtx.Dispatch(Math::DivideByMultiple(m_TotalVertices * 2, 64), 1, 1);
+
+    // Barrier: Ensure features and MLP are updated before Graphics queue reads them
+    trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    trainCtx.Finish();
+
+    // Update Adam exponents for the next frame
+    trainingStep++;
+    adamBeta1T *= adamBeta1;
+    adamBeta2T *= adamBeta2;
+    // -------------------------------
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
 

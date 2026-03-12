@@ -16,14 +16,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
     // 1. Uniform Triangle Sampling
     uint triID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
     
-    // Assumes 16-bit index buffer (standard for many Sponza meshes, adjust if 32-bit!)
-    uint indexOffset = triID * 3 * 2;
-    uint dword0 = IndexBuffer.Load(indexOffset & ~3);
-    uint dword1 = IndexBuffer.Load((indexOffset + 4) & ~3);
-    
-    uint i0 = (indexOffset % 4 == 0) ? (dword0 & 0xFFFF) : (dword0 >> 16);
-    uint i1 = (indexOffset % 4 == 0) ? (dword0 >> 16) : (dword1 & 0xFFFF);
-    uint i2 = (indexOffset % 4 == 0) ? (dword1 & 0xFFFF) : (dword1 >> 16);
+    GlobalTriangle tri = TriangleBuffer[triID];
+    uint i0 = tri.i0;
+    uint i1 = tri.i1;
+    uint i2 = tri.i2;
 
     // 2. Uniform Barycentrics
     float u1 = rand(rng);
@@ -34,11 +30,11 @@ void main(uint3 DTid : SV_DispatchThreadID)
     gateData.indices = uint3(i0, i1, i2);
 
     // 3. Ground Truth Sampling
-    float2 uv0 = asfloat(VertexUVBuffer.Load2(i0 * 8)); // Assumes 8-byte (float2) UVs
-    float2 uv1 = asfloat(VertexUVBuffer.Load2(i1 * 8));
-    float2 uv2 = asfloat(VertexUVBuffer.Load2(i2 * 8));
+    float2 uv0 = asfloat(VertexUVBuffer.Load2(i0 * VertexStride + uvOffset));
+    float2 uv1 = asfloat(VertexUVBuffer.Load2(i1 * VertexStride + uvOffset));
+    float2 uv2 = asfloat(VertexUVBuffer.Load2(i2 * VertexStride + uvOffset));
     float2 interpUV = gateData.barycentrics.x * uv0 + gateData.barycentrics.y * uv1 + gateData.barycentrics.z * uv2;
-    float3 target = GroundTruthTexture.SampleLevel(LinearSampler, interpUV, 0).rgb;
+    float3 target = BindlessTextures[tri.materialIdx * 6].SampleLevel(LinearSampler, interpUV, 0).rgb;
 
     // 4. FORWARD PASS
     float4 activations[ACTIVATION_QUARTETS_PER_NETWORK];

@@ -220,6 +220,5 @@
     <FxCompile Include="EncodeUVCS.hlsl">
       <Filter>Gate</Filter>
     </FxCompile>
-    <FxCompile Include="TestTrianglesCS.hlsl" />
   </ItemGroup>
 </Project>

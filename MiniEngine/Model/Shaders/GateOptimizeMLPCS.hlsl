@@ -6,8 +6,8 @@
 [numthreads(OPTIMIZATION_THREADGROUP_SIZE, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
     uint index = DTid.x;
-    // Assuming 41 total parameter quartets for 8->16->4
-    if (index >= 41) return; 
+
+    if (index >= 53) return; // 212 floats / 4 = 53 quartets
 
     float4 gradient = unpackFloat4(MLPGradientBuffer[index]);
     AdamData adam = MLPAdamBuffer[index];
