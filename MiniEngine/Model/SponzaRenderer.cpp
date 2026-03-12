@@ -37,6 +37,7 @@
 #include "CompiledShaders/ModelViewerPS.h"
 #include "CompiledShaders/GateVS.h"
 #include "CompiledShaders/GatePS.h"
+#include "CompiledShaders/EncodeUVCS.h"
 
 using namespace Math;
 using namespace Graphics;
@@ -151,10 +152,11 @@ void Sponza::Startup( Camera& Camera )
 
 
     // --- GATE ---
-    m_GateRootSig.Reset(3, 0);
+    m_GateRootSig.Reset(4, 0);
     m_GateRootSig[0].InitAsConstantBuffer(0); // b0: Camera Matrices
     m_GateRootSig[1].InitAsBufferSRV(0);      // t0: Feature Buffer (StructuredBuffer)
     m_GateRootSig[2].InitAsBufferSRV(1);      // t1: MLP Weights (ByteAddressBuffer)
+    m_GateRootSig[3].InitAsConstants(1, 1);   // b1: Base Vertex (Register 1, 1 DWORD)
     m_GateRootSig.Finalize(L"Gate Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, ColorFormat);
@@ -165,6 +167,23 @@ void Sponza::Startup( Camera& Camera )
     m_GatePSO.SetRenderTargetFormats(1, &ColorFormat, DepthFormat);
     m_GatePSO.Finalize();
     // ------------
+
+    // Variables to add to your Sponza namespace
+    RootSignature m_EncodeUVRootSig;
+    ComputePSO m_EncodeUVPSO(L"Sponza: Encode UVs CS");
+
+    // 1. Root Signature setup
+    m_EncodeUVRootSig.Reset(3, 0);
+    m_EncodeUVRootSig[0].InitAsConstants(0, 4);       // b0: TotalVertices, VertexStride, UVOffset
+    m_EncodeUVRootSig[1].InitAsBufferSRV(0);          // t0: Vertex Buffer
+    m_EncodeUVRootSig[2].InitAsBufferUAV(0);          // u0: RW Feature Buffer
+    m_EncodeUVRootSig.Finalize(L"Encode UV Root Sig");
+
+    // 2. PSO setup (assuming g_pEncodeUV_CS is your compiled shader byte array)
+    m_EncodeUVPSO.SetRootSignature(m_EncodeUVRootSig);
+    m_EncodeUVPSO.SetComputeShader(g_pEncodeUVCS, sizeof(g_pEncodeUVCS));
+    m_EncodeUVPSO.Finalize();
+
 
 
     ASSERT(m_Model.Load(L"Sponza/sponza.h3d"), "Failed to load model");
@@ -197,6 +216,34 @@ void Sponza::Startup( Camera& Camera )
     m_GateMLPBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
     m_GateMLPGradientBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), nullptr);
     // ------------
+
+
+    // Calculate the UV offset based on your D3D12_INPUT_ELEMENT_DESC
+    // POSITION is RGB32_FLOAT (12 bytes), so TEXCOORD starts at byte 12.
+    uint32_t uvOffset = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].offset;
+    uint32_t uvFormat = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].format;
+    uint32_t isHalfFloat = (uvFormat == DXGI_FORMAT_R16G16_FLOAT) ? 1 : 0;
+
+
+    ComputeContext& cptContext = ComputeContext::Begin(L"Encode UVs into Features");
+
+    cptContext.SetRootSignature(m_EncodeUVRootSig);
+    cptContext.SetPipelineState(m_EncodeUVPSO);
+    // Bind Constants (TotalVertices, VertexStride, UVOffset)
+
+    cptContext.SetConstants(0, totalVertices, VertexStride, uvOffset, isHalfFloat);
+    // Bind Vertex Buffer as SRV (ByteAddressBuffer)
+    cptContext.GetCommandList()->SetComputeRootShaderResourceView(1, m_Model.GetVertexBuffer().BufferLocation);
+    // Bind Feature Buffer as UAV
+    cptContext.SetBufferUAV(2, m_GateFeatureBuffer);
+    // Dispatch (thread groups = total vertices / 64)
+    uint32_t threadGroups = Math::DivideByMultiple(totalVertices, 64);
+    cptContext.Dispatch(threadGroups, 1, 1);
+    // Ensure the compute shader finishes writing before the graphics queue tries to read it
+    cptContext.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    cptContext.Finish(true); // 'true' stalls the CPU until GPU is done, good for initialization
+
 
 
     // The caller of this function can override which materials are considered cutouts
@@ -313,7 +360,8 @@ void Sponza::RenderScene(
     const D3D12_RECT& scissor,
     bool skipDiffusePass,
     bool skipShadowMap,
-    bool renderGateToViewport)
+    bool renderGateToViewport,
+    int  numMeshesRendered)
 {
     Renderer::UpdateGlobalDescriptors();
 
@@ -484,10 +532,13 @@ void Sponza::RenderScene(
         for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
         {
             const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
-            
+
             uint32_t indexCount = mesh.indexCount;
             uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
             uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
+
+            // NEW: Push the baseVertex to Root Parameter 3 (which maps to b1)
+            gfxContext.SetConstants(3, baseVertex);
 
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
         }

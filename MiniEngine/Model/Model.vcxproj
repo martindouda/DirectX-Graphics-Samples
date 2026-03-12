@@ -95,10 +95,19 @@
     <None Include="packages.config" />
     <None Include="Shaders\Common.hlsli" />
     <None Include="Shaders\FillLightGridCS.hlsli" />
+    <None Include="Shaders\GateTrainCommon.hlsli" />
     <None Include="Shaders\LightGrid.hlsli" />
     <None Include="Shaders\Lighting.hlsli" />
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="EncodeUVCS.hlsl">
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.3</ShaderModel>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.3</ShaderModel>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">6.3</ShaderModel>
+    </FxCompile>
+    <FxCompile Include="Shaders\GateBackpropCS.hlsl" />
+    <FxCompile Include="Shaders\GateOptimizeFeaturesCS.hlsl" />
+    <FxCompile Include="Shaders\GateOptimizeMLPCS.hlsl" />
     <FxCompile Include="Shaders\GatePS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>

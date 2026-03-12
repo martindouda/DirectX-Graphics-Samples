@@ -1,4 +1,5 @@
-// GateInference.hlsli
+// File: GateInference.hlsli
+
 #define LEAKY_RELU_SLOPE 0.01f
 
 float4 activationFunction(float4 v)

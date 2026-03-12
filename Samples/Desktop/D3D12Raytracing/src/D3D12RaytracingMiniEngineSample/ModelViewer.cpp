@@ -1,3 +1,5 @@
+// File: ModelViewer.cpp
+
 //*********************************************************
 //
 // Copyright (c) Microsoft. All rights reserved.
@@ -60,6 +62,7 @@ using namespace Graphics;
 
 using Microsoft::WRL::ComPtr;
 
+int g_NumMeshesRendered = 100;
 
 
 namespace Sponza
@@ -207,7 +210,6 @@ private:
     void RaytraceDiffuse(GraphicsContext& context, const Math::Camera& camera, ColorBuffer& colorTarget);
     void RaytraceShadows(GraphicsContext& context, const Math::Camera& camera, ColorBuffer& colorTarget, DepthBuffer& depth);
     void RaytraceReflections(GraphicsContext& context, const Math::Camera& camera, ColorBuffer& colorTarget, DepthBuffer& depth, ColorBuffer& normals);
-	void RaytraceGateTraining(GraphicsContext& context, const Math::Camera& camera);
 
     Camera m_Camera;
     std::unique_ptr<FlyingFPSCamera> m_CameraController;
@@ -1011,24 +1013,11 @@ void D3D12RaytracingMiniEngineSample::RenderScene()
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
 
 
-    // --- GATE ---
-    /*if (rayTracingMode == RTM_GATE)
-    {
-        RaytraceGateTraining(gfxContext, m_Camera);
-
-        // Transition the buffers back to SRV for the Display Pass
-        gfxContext.TransitionResource(Sponza::m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        gfxContext.TransitionResource(Sponza::m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        gfxContext.FlushResourceBarriers();
-    }*/
-    // ------------
-
-
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
     const D3D12_VIEWPORT& viewport = m_MainViewport;
     const D3D12_RECT& scissor = m_MainScissor;
 
-    Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor, skipDiffusePass, skipShadowMap, rayTracingMode == RTM_GATE);
+    Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor, skipDiffusePass, skipShadowMap, rayTracingMode == RTM_GATE, g_NumMeshesRendered);
 
     // Some systems generate a per-pixel velocity buffer to better track dynamic and skinned meshes.  Everything
     // is static in our scene, so we generate velocity from camera motion and the depth buffer.  A velocity buffer
@@ -1333,58 +1322,6 @@ void D3D12RaytracingMiniEngineSample::RaytraceReflections(GraphicsContext& conte
     pRaytracingCommandList->DispatchRays(&dispatchRaysDesc);
 }
 
-/*void D3D12RaytracingMiniEngineSample::RaytraceGateTraining(GraphicsContext& context, const Math::Camera& camera)
-{
-    ScopedTimer _p0(L"GATE Training Pass", context);
-
-    // We only need a small batch of random rays for training (e.g. 64k)
-    uint32_t dispatchWidth = 256;
-    uint32_t dispatchHeight = 256;
-
-    DynamicCB inputs = g_dynamicCb;
-    auto m0 = camera.GetViewProjMatrix();
-    auto m1 = Transpose(Invert(m0));
-    memcpy(&inputs.cameraToWorld, &m1, sizeof(inputs.cameraToWorld));
-    memcpy(&inputs.worldCameraPosition, &camera.GetPosition(), sizeof(inputs.worldCameraPosition));
-    inputs.resolution.x = (float)dispatchWidth;
-    inputs.resolution.y = (float)dispatchHeight;
-
-    // Transition our GATE buffers to UAV (Read/Write) State
-    ComputeContext& ctx = context.GetComputeContext();
-    ctx.WriteBuffer(g_dynamicConstantBuffer, 0, &inputs, sizeof(inputs));
-    ctx.TransitionResource(g_dynamicConstantBuffer, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-    ctx.TransitionResource(Sponza::m_GateFeatureBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ctx.TransitionResource(Sponza::m_GateFeatureGradientBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ctx.TransitionResource(Sponza::m_GateMLPBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ctx.TransitionResource(Sponza::m_GateMLPGradientBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ctx.FlushResourceBarriers();
-
-    ID3D12GraphicsCommandList* pCommandList = context.GetCommandList();
-    ComPtr<ID3D12GraphicsCommandList4> pRaytracingCommandList;
-    pCommandList->QueryInterface(IID_PPV_ARGS(&pRaytracingCommandList));
-
-    ID3D12DescriptorHeap* pDescriptorHeaps[] = { &g_pRaytracingDescriptorHeap->GetDescriptorHeap() };
-    pRaytracingCommandList->SetDescriptorHeaps(ARRAYSIZE(pDescriptorHeaps), pDescriptorHeaps);
-
-    pCommandList->SetComputeRootSignature(g_GlobalRaytracingRootSignature.Get());
-    pCommandList->SetComputeRootDescriptorTable(0, g_SceneSrvs);
-    pCommandList->SetComputeRootConstantBufferView(1, g_hitConstantBuffer.GetGpuVirtualAddress());
-    pCommandList->SetComputeRootConstantBufferView(2, g_dynamicConstantBuffer.GetGpuVirtualAddress());
-    pCommandList->SetComputeRootDescriptorTable(4, g_OutputUAV);
-    pRaytracingCommandList->SetComputeRootShaderResourceView(7, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
-
-    // Bind our 4 GATE buffers to the new root slots
-    pCommandList->SetComputeRootUnorderedAccessView(8, Sponza::m_GateFeatureBuffer.GetGpuVirtualAddress());
-    pCommandList->SetComputeRootUnorderedAccessView(9, Sponza::m_GateFeatureGradientBuffer.GetGpuVirtualAddress());
-    pCommandList->SetComputeRootUnorderedAccessView(10, Sponza::m_GateMLPBuffer.GetGpuVirtualAddress());
-    pCommandList->SetComputeRootUnorderedAccessView(11, Sponza::m_GateMLPGradientBuffer.GetGpuVirtualAddress());
-
-    // Dispatch the Training Rays!
-    D3D12_DISPATCH_RAYS_DESC dispatchRaysDesc = g_RaytracingInputs[GateTraining].GetDispatchRayDesc(dispatchWidth, dispatchHeight);
-    pRaytracingCommandList->SetPipelineState1(g_RaytracingInputs[GateTraining].m_pPSO.Get());
-    pRaytracingCommandList->DispatchRays(&dispatchRaysDesc);
-}*/
-
 void D3D12RaytracingMiniEngineSample::RenderUI(class GraphicsContext& gfxContext)
 {
     const UINT framesToAverage = 20;
@@ -1446,6 +1383,8 @@ void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
+
+    ImGui::SliderInt("Number of Meshes Rendered", &g_NumMeshesRendered, 0, 100);
 
     // 3. Camera Controls
     ImGui::Text("Camera Controls");

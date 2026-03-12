@@ -51,6 +51,9 @@
     <Filter Include="Shaders">
       <UniqueIdentifier>{9169b7c9-f1a7-41d4-9098-58de36da850c}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Gate">
+      <UniqueIdentifier>{041d5461-64ac-4006-adb9-8b137560c9d7}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SponzaRenderer.h">
@@ -111,7 +114,10 @@
     </None>
     <None Include="packages.config" />
     <None Include="Shaders\GateInference.hlsli">
-      <Filter>Shaders</Filter>
+      <Filter>Gate</Filter>
+    </None>
+    <None Include="Shaders\GateTrainCommon.hlsli">
+      <Filter>Gate</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
@@ -196,11 +202,23 @@
     <FxCompile Include="Shaders\DefaultNoUV1SkinVS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
-    <FxCompile Include="Shaders\GatePS.hlsl">
-      <Filter>Shaders</Filter>
-    </FxCompile>
     <FxCompile Include="Shaders\GateVS.hlsl">
-      <Filter>Shaders</Filter>
+      <Filter>Gate</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\GatePS.hlsl">
+      <Filter>Gate</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\GateBackpropCS.hlsl">
+      <Filter>Gate</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\GateOptimizeFeaturesCS.hlsl">
+      <Filter>Gate</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\GateOptimizeMLPCS.hlsl">
+      <Filter>Gate</Filter>
+    </FxCompile>
+    <FxCompile Include="EncodeUVCS.hlsl">
+      <Filter>Gate</Filter>
     </FxCompile>
   </ItemGroup>
 </Project>

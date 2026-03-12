@@ -1,6 +1,13 @@
+// File: GateVS.hlsl
+
 cbuffer VSConstants : register(b0)
 {
     float4x4 WVP;
+};
+
+cbuffer MeshConstants : register(b1)
+{
+    uint baseVertex;
 };
 
 struct GateFeature 
@@ -27,7 +34,12 @@ VSOutput main(VSInput input, uint vertexID : SV_VertexID)
     VSOutput output;
     output.position = mul(WVP, float4(input.position, 1.0f));
 
-    GateFeature feat = featureBuffer[vertexID];
+    GateFeature feat = featureBuffer[vertexID + baseVertex];
+
+    //if (vertexID < 1000)
+    //    output.f0 = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    //else
+    //    output.f0 = float4(0.0f, 0.0f, 1.0f, 1.0f);
     output.f0 = feat.data[0];
     output.f1 = feat.data[1];
 
