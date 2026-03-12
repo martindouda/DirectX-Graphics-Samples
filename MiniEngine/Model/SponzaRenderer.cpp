@@ -72,6 +72,14 @@ namespace Sponza
     ByteAddressBuffer m_GateMLPGradientBuffer;
 
     StructuredBuffer m_VertexMaterialMap;
+
+    struct GlobalTriangle
+    {
+        uint32_t i0, i1, i2;
+        uint32_t materialIdx;
+    };
+
+    StructuredBuffer m_GlobalTriangleBuffer; // Add to Sponza namespace
     // ------------
 
 
@@ -175,15 +183,16 @@ void Sponza::Startup( Camera& Camera )
     ComputePSO m_EncodeColorPSO(L"Sponza: Encode UVs CS");
 
     // 1. Root Signature setup
-    m_EncodeColorRootSig.Reset(5, 1); // 5 Parameters, 1 Static Sampler
+    m_EncodeColorRootSig.Reset(6, 1); // 5 Parameters, 1 Static Sampler
     m_EncodeColorRootSig[0].InitAsConstants(0, 3);    // b0: TotalVertices, VertexStride, UVOffset
     m_EncodeColorRootSig[1].InitAsBufferSRV(0);       // t0: Vertex Buffer
-    m_EncodeColorRootSig[2].InitAsBufferSRV(1);       // t1: Vertex Material Map
-    m_EncodeColorRootSig[3].InitAsBufferUAV(0);       // u0: RW Feature Buffer
+    m_EncodeColorRootSig[2].InitAsBufferSRV(1);       // t1: Triangle Index Map
+    m_EncodeColorRootSig[3].InitAsBufferSRV(2);       // t2: Vertex Material Map
+    m_EncodeColorRootSig[4].InitAsBufferUAV(0);       // u0: RW Feature Buffer
 
     // Unbounded Descriptor Table for textures (mapped to space1 in HLSL)
-    m_EncodeColorRootSig[4].InitAsDescriptorTable(1);
-    m_EncodeColorRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
+    m_EncodeColorRootSig[5].InitAsDescriptorTable(1);
+    m_EncodeColorRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
 
     // Initialize the 1 static sampler
     m_EncodeColorRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
@@ -241,6 +250,46 @@ void Sponza::Startup( Camera& Camera )
     }
     m_VertexMaterialMap.Create(L"Vertex Material Map", totalVertices, sizeof(uint32_t), vertexMaterials.data());
 
+    uint32_t totalTriangles = 0;
+    for (uint32_t i = 0; i < m_Model.GetMeshCount(); ++i)
+    {
+        totalTriangles += m_Model.GetMesh(i).indexCount / 3;
+    }
+
+    std::vector<GlobalTriangle> globalTris(totalTriangles);
+    uint32_t triOffset = 0;
+
+    // Grab the raw CPU index array we just exposed
+    const unsigned char* rawIndexData = m_Model.GetIndexData();
+
+    for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
+    {
+        const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
+
+        // The amount we need to shift the local vertex IDs to make them global
+        uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
+
+        // Jump to the exact byte where this mesh's indices start, and cast to 16-bit ints
+        const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
+
+        for (uint32_t i = 0; i < mesh.indexCount; i += 3)
+        {
+            // Read 3 indices, shift them into global space, and store
+            globalTris[triOffset].i0 = cpuIndexData[i + 0] + baseVertex;
+            globalTris[triOffset].i1 = cpuIndexData[i + 1] + baseVertex;
+            globalTris[triOffset].i2 = cpuIndexData[i + 2] + baseVertex;
+
+            // Tag the triangle with its material so the shader knows which bindless texture to sample
+            globalTris[triOffset].materialIdx = mesh.materialIndex;
+
+            triOffset++;
+        }
+    }
+
+    // Allocate the buffer for the GPU!
+    // (Make sure to add 'StructuredBuffer m_GlobalTriangleBuffer;' to your Sponza namespace)
+    m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", totalTriangles, sizeof(GlobalTriangle), globalTris.data());
+
     // Calculate the UV offset based on your D3D12_INPUT_ELEMENT_DESC
     // POSITION is RGB32_FLOAT (12 bytes), so TEXCOORD starts at byte 12.
     ComputeContext& cptContext = ComputeContext::Begin(L"Encode Colors into Features");
@@ -251,18 +300,19 @@ void Sponza::Startup( Camera& Camera )
 
     // Bind Constants
     uint32_t uvOffset = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].offset;
-    cptContext.SetConstants(0, totalVertices, VertexStride, uvOffset);
+    cptContext.SetConstants(0, totalTriangles, VertexStride, uvOffset);
 
     // Bind Buffers via GPU Virtual Addresses
     cptContext.GetCommandList()->SetComputeRootShaderResourceView(1, m_Model.GetVertexBuffer().BufferLocation);
-    cptContext.GetCommandList()->SetComputeRootShaderResourceView(2, m_VertexMaterialMap.GetGpuVirtualAddress());
-    cptContext.SetBufferUAV(3, m_GateFeatureBuffer);
+    cptContext.GetCommandList()->SetComputeRootShaderResourceView(2, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
+    cptContext.GetCommandList()->SetComputeRootShaderResourceView(3, m_VertexMaterialMap.GetGpuVirtualAddress());
+    cptContext.SetBufferUAV(4, m_GateFeatureBuffer);
 
-    // NEW: Bind the ENTIRE texture heap to Root Parameter 4!
-    cptContext.SetDescriptorTable(4, m_Model.GetSRVs(0));
+    // NEW: Bind the ENTIRE texture heap to Root Parameter 5!
+    cptContext.SetDescriptorTable(5, m_Model.GetSRVs(0));
 
     // One single dispatch for the entire scene!
-    uint32_t threadGroups = Math::DivideByMultiple(totalVertices, 64);
+    uint32_t threadGroups = Math::DivideByMultiple(totalTriangles, 64);
     cptContext.Dispatch(threadGroups, 1, 1);
 
     cptContext.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

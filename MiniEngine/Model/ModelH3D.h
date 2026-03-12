@@ -192,6 +192,9 @@ public:
     const D3D12_VERTEX_BUFFER_VIEW& GetVertexBuffer() const { return m_VertexBuffer; }
     const D3D12_INDEX_BUFFER_VIEW& GetIndexBuffer() const { return m_IndexBuffer; }
 
+    const unsigned char* GetVertexData() const { return m_pVertexData; }
+    const unsigned char* GetIndexData() const { return m_pIndexData; }
+
     DescriptorHandle GetSRVs(uint32_t materialIdx, uint32_t subIdx=0) const
     {
         return m_SRVs + (materialIdx * 6 + subIdx) * m_SRVDescriptorSize;
