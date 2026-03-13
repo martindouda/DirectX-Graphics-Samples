@@ -34,7 +34,6 @@ float4 loadNNParameter(const uint index, inout ByteAddressBuffer nnParameters)
 void evalLayer(
     inout float4 previousActivations[MAX_NEURON_QUARTETS_PER_LAYER],
     inout float4 currentActivations[MAX_NEURON_QUARTETS_PER_LAYER],
-    inout ByteAddressBuffer nnParameters,
     uint paramOffset,
     const uint neuronQuartetCountCurrentLayer,
     const uint neuronQuartetCountPreviousLayer,
@@ -47,21 +46,17 @@ void evalLayer(
         for (uint previousNeuronQuartet = 0; previousNeuronQuartet < neuronQuartetCountPreviousLayer; previousNeuronQuartet++)
         {
             const float4 prevAct = previousActivations[previousNeuronQuartet];
-            neuronValue.x += dot(loadNNParameter(paramOffset++, nnParameters), prevAct);
-            neuronValue.y += dot(loadNNParameter(paramOffset++, nnParameters), prevAct);
-            neuronValue.z += dot(loadNNParameter(paramOffset++, nnParameters), prevAct);
-            neuronValue.w += dot(loadNNParameter(paramOffset++, nnParameters), prevAct);
+            neuronValue.x += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.y += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.z += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.w += dot(MLPParameterBuffer[paramOffset++], prevAct);
         }
         
-        const float4 bias = loadNNParameter(paramOffset++, nnParameters);
+        const float4 bias = MLPParameterBuffer[paramOffset++];
 
         if (layerType == HIDDEN_LAYER)
-        {
             currentActivations[neuronQuartet] = activationFunction(neuronValue + bias);
-        }
         else
-        {
             currentActivations[neuronQuartet] = activationFunctionOutput(neuronValue + bias);
-        }
     }
 }

@@ -1,11 +1,7 @@
-// --- Architecture Macros (8 -> 16 -> 4) ---
-#define MAX_NEURON_QUARTETS_PER_LAYER 4 // Max 16 neurons / 4
-#define HIDDEN_LAYER 1
-#define OUTPUT_LAYER 2
+// File: GatePS.hlsl
 
-ByteAddressBuffer nnParametersInputBuffer : register(t1);
-
-#include "GateInference.hlsli"
+#define GATE_INFERENCE
+#include "GateTrainCommon.hlsli"
 
 struct VSOutput 
 {
@@ -14,13 +10,9 @@ struct VSOutput
     float4 f1 : TEXCOORD1;
 };
 
-
+// --- Architecture Macros (8 -> 16 -> 4) ---
 float4 main(VSOutput input) : SV_TARGET
 {
-    //float3 color = input.f0.xyz;
-    //return float4(color.x, color.y, color.z, 1.0f);
-
-
     float4 activationsA[MAX_NEURON_QUARTETS_PER_LAYER];
     float4 activationsB[MAX_NEURON_QUARTETS_PER_LAYER];
 
@@ -34,14 +26,13 @@ float4 main(VSOutput input) : SV_TARGET
     // Current Quartets: 4 (16 neurons). Previous: 2 (8 inputs).
     // Offset: 0. 
     // This layer consumes 36 quartets total (32 for weights + 4 for biases).
-    evalLayer(activationsA, activationsB, nnParametersInputBuffer, 0, 4, 2, HIDDEN_LAYER);
+    evalLayer(activationsA, activationsB, 0, 4, 2, HIDDEN_LAYER);
 
     // 3. LAYER 2 (16 Hidden -> 4 Outputs)
     // Current Quartets: 1 (4 outputs). Previous: 4 (16 hidden).
     // Offset: Starts at 36.
-    evalLayer(activationsB, activationsA, nnParametersInputBuffer, 36, 1, 4, OUTPUT_LAYER);
+    evalLayer(activationsB, activationsA, 36, 1, 4, OUTPUT_LAYER);
 
     // 4. Return Output (Color is stored in the first quartet of the output array)
     return float4(activationsA[0].xyz, 1.0f);
-    //return input.f0;
 }

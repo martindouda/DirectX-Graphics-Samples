@@ -1,5 +1,8 @@
 // File: GateVS.hlsl
 
+#define GATE_INFERENCE
+#include "GateTrainCommon.hlsli"
+
 cbuffer VSConstants : register(b0)
 {
     float4x4 WVP;
@@ -9,13 +12,6 @@ cbuffer MeshConstants : register(b1)
 {
     uint baseVertex;
 };
-
-struct GateFeature 
-{
-    float4 data[2]; // 8 floats
-};
-
-StructuredBuffer<GateFeature> featureBuffer : register(t0);
 
 struct VSInput 
 {

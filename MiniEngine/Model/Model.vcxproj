@@ -61,6 +61,7 @@
   <ItemGroup>
     <ClInclude Include="Animation.h" />
     <ClInclude Include="ConstantBuffers.h" />
+    <ClInclude Include="Gate.h" />
     <ClInclude Include="glTF.h" />
     <ClInclude Include="IndexOptimizePostTransform.h" />
     <ClInclude Include="json.hpp" />
@@ -77,6 +78,7 @@
   <ItemGroup>
     <ClCompile Include="Animation.cpp" />
     <ClCompile Include="BuildH3D.cpp" />
+    <ClCompile Include="Gate.cpp" />
     <ClCompile Include="glTF.cpp" />
     <ClCompile Include="IndexOptimizePostTransform.cpp" />
     <ClCompile Include="LightManager.cpp" />
@@ -91,7 +93,6 @@
     <ClCompile Include="TextureConvert.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Shaders\GateInference.hlsli" />
     <None Include="packages.config" />
     <None Include="Shaders\Common.hlsli" />
     <None Include="Shaders\FillLightGridCS.hlsli" />

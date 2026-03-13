@@ -35,12 +35,8 @@
 #include "CompiledShaders/DepthViewerPS.h"
 #include "CompiledShaders/ModelViewerVS.h"
 #include "CompiledShaders/ModelViewerPS.h"
-#include "CompiledShaders/GateVS.h"
-#include "CompiledShaders/GatePS.h"
-#include "CompiledShaders/EncodeUVCS.h"
-#include "CompiledShaders/GateBackpropCS.h"
-#include "CompiledShaders/GateOptimizeFeaturesCS.h"
-#include "CompiledShaders/GateOptimizeMLPCS.h"
+
+#include "Gate.h"
 
 using namespace Math;
 using namespace Graphics;
@@ -50,7 +46,7 @@ namespace Sponza
     void RenderLightShadows(GraphicsContext& gfxContext, const Camera& camera);
 
     enum eObjectFilter { kOpaque = 0x1, kCutout = 0x2, kTransparent = 0x4, kAll = 0xF, kNone = 0x0 };
-    void RenderObjects( GraphicsContext& Context, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter = kAll );
+    void RenderObjects(GraphicsContext& Context, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter = kAll);
 
 
     GraphicsPSO m_DepthPSO = { (L"Sponza: Depth PSO") };
@@ -59,41 +55,6 @@ namespace Sponza
     GraphicsPSO m_CutoutModelPSO = { (L"Sponza: Cutout Color PSO") };
     GraphicsPSO m_ShadowPSO(L"Sponza: Shadow PSO");
     GraphicsPSO m_CutoutShadowPSO(L"Sponza: Cutout Shadow PSO");
-
-
-    // --- GATE ---
-	GraphicsPSO m_GatePSO = { L"Sponza: Gate PSO" };
-    RootSignature m_GateRootSig;
-    ColorBuffer m_GateColorBuffer;
-
-    StructuredBuffer m_GateFeatureBuffer;
-    ByteAddressBuffer m_GateFeatureGradientBuffer;
-    ByteAddressBuffer m_GateMLPBuffer;
-    ByteAddressBuffer m_GateMLPGradientBuffer;
-
-    StructuredBuffer m_VertexMaterialMap;
-
-    struct GlobalTriangle
-    {
-        uint32_t i0, i1, i2;
-        uint32_t materialIdx;
-    };
-
-    StructuredBuffer m_GlobalTriangleBuffer; // Add to Sponza namespace
-
-    ByteAddressBuffer m_GateFeatureAdamBuffer;
-    ByteAddressBuffer m_GateMLPAdamBuffer;
-
-    // Add PSOs for the training shaders
-    RootSignature m_GateTrainRootSig;
-    ComputePSO m_GateBackpropPSO(L"GATE: Backprop");
-    ComputePSO m_GateOptMLPPSO(L"GATE: Optimize MLP");
-    ComputePSO m_GateOptFeatPSO(L"GATE: Optimize Features");
-
-    uint32_t m_TotalTriangles = 0;
-    uint32_t m_TotalVertices = 0;
-    // ------------
-
 
     ModelH3D m_Model;
     std::vector<bool> m_pMaterialIsCutout;
@@ -108,9 +69,12 @@ namespace Sponza
     NumVar ShadowDimX("Sponza/Lighting/Shadow Dim X", 5000, 1000, 10000, 100 );
     NumVar ShadowDimY("Sponza/Lighting/Shadow Dim Y", 3000, 1000, 10000, 100 );
     NumVar ShadowDimZ("Sponza/Lighting/Shadow Dim Z", 3000, 1000, 10000, 100 );
+
+    Gate m_Gate;
+    ColorBuffer m_GateColorBuffer;
 }
 
-void Sponza::Startup( Camera& Camera )
+void Sponza::Startup(Camera& Camera)
 {
     DXGI_FORMAT ColorFormat = g_SceneColorBuffer.GetFormat();
     DXGI_FORMAT NormalFormat = g_SceneNormalBuffer.GetFormat();
@@ -172,215 +136,12 @@ void Sponza::Startup( Camera& Camera )
     m_CutoutModelPSO.SetRasterizerState(RasterizerTwoSided);
     m_CutoutModelPSO.Finalize();
 
-
-    // --- GATE ---
-    m_GateRootSig.Reset(4, 0);
-    m_GateRootSig[0].InitAsConstantBuffer(0); // b0: Camera Matrices
-    m_GateRootSig[1].InitAsBufferSRV(0);      // t0: Feature Buffer (StructuredBuffer)
-    m_GateRootSig[2].InitAsBufferSRV(1);      // t1: MLP Weights (ByteAddressBuffer)
-    m_GateRootSig[3].InitAsConstants(1, 1);   // b1: Base Vertex (Register 1, 1 DWORD)
-    m_GateRootSig.Finalize(L"Gate Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-
-    m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, ColorFormat);
-    m_GatePSO = m_ModelPSO;
-    m_GatePSO.SetRootSignature(m_GateRootSig);
-    m_GatePSO.SetVertexShader(g_pGateVS, sizeof(g_pGateVS));
-    m_GatePSO.SetPixelShader(g_pGatePS, sizeof(g_pGatePS));
-    m_GatePSO.SetRenderTargetFormats(1, &ColorFormat, DepthFormat);
-    m_GatePSO.Finalize();
-    // ------------
-
-    // Variables to add to your Sponza namespace
-    RootSignature m_EncodeColorRootSig;
-    ComputePSO m_EncodeColorPSO(L"Sponza: Encode UVs CS");
-
-    // 1. Root Signature setup
-    m_EncodeColorRootSig.Reset(6, 1); // 5 Parameters, 1 Static Sampler
-    m_EncodeColorRootSig[0].InitAsConstants(0, 3);    // b0: TotalVertices, VertexStride, UVOffset
-    m_EncodeColorRootSig[1].InitAsBufferSRV(0);       // t0: Vertex Buffer
-    m_EncodeColorRootSig[2].InitAsBufferSRV(1);       // t1: Triangle Index Map
-    m_EncodeColorRootSig[3].InitAsBufferSRV(2);       // t2: Vertex Material Map
-    m_EncodeColorRootSig[4].InitAsBufferUAV(0);       // u0: RW Feature Buffer
-
-    // Unbounded Descriptor Table for textures (mapped to space1 in HLSL)
-    m_EncodeColorRootSig[5].InitAsDescriptorTable(1);
-    m_EncodeColorRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
-
-    // Initialize the 1 static sampler
-    m_EncodeColorRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
-
-    m_EncodeColorRootSig.Finalize(L"Encode UV Root Sig");
-
-    // 2. PSO setup (assuming g_pEncodeUV_CS is your compiled shader byte array)
-    m_EncodeColorPSO.SetRootSignature(m_EncodeColorRootSig);
-    m_EncodeColorPSO.SetComputeShader(g_pEncodeUVCS, sizeof(g_pEncodeUVCS));
-    m_EncodeColorPSO.Finalize();
-
-
-
     ASSERT(m_Model.Load(L"Sponza/sponza.h3d"), "Failed to load model");
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
 
 
-    // --- GATE ---
-    // 2. ALLOCATE GATE FEATURE BUFFER (8 floats per vertex)
-    uint32_t VertexStride = m_Model.GetVertexStride();
-    m_TotalVertices = m_Model.GetVertexBuffer().SizeInBytes / VertexStride;
-
-    struct GateFeature { XMFLOAT4 data[2]; };
-    std::vector<GateFeature> initialFeatures(m_TotalVertices);
-    for (uint32_t i = 0; i < m_TotalVertices; ++i)
-    {
-        // Random 8-dimensional feature
-        initialFeatures[i].data[0] = XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-        initialFeatures[i].data[1] = XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-    }
-    m_GateFeatureBuffer.Create(L"GATE Feature Buffer", m_TotalVertices, sizeof(GateFeature), initialFeatures.data());
-    m_GateFeatureGradientBuffer.Create(L"GATE Feature Gradients", m_TotalVertices * 8, sizeof(float), nullptr);
-
-    // 3. ALLOCATE MLP WEIGHTS BUFFER (ByteAddressBuffer)
-    // 212 floats total: Layer 1 (8x16 + 16 = 144) + Layer 2 (16x4 + 4 = 68)
-    uint32_t numNetworkParameters = 212;
-    std::vector<float> initialWeights(numNetworkParameters);
-    for (uint32_t i = 0; i < numNetworkParameters; ++i) 
-    {
-        initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f; // Small random weights
-    }
-    m_GateMLPBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
-    m_GateMLPGradientBuffer.Create(L"MLPZen Parameters", numNetworkParameters, sizeof(float), nullptr);
-    // ------------
-
-    std::vector<uint32_t> vertexMaterials(m_TotalVertices, 0);
-    for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
-    {
-        const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
-        uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
-
-        for (uint32_t v = 0; v < mesh.vertexCount; ++v)
-        {
-            vertexMaterials[baseVertex + v] = mesh.materialIndex;
-        }
-    }
-    m_VertexMaterialMap.Create(L"Vertex Material Map", m_TotalVertices, sizeof(uint32_t), vertexMaterials.data());
-
-    m_TotalTriangles = 0;
-    for (uint32_t i = 0; i < m_Model.GetMeshCount(); ++i)
-    {
-        m_TotalTriangles += m_Model.GetMesh(i).indexCount / 3;
-    }
-
-    std::vector<GlobalTriangle> globalTris(m_TotalTriangles);
-    uint32_t triOffset = 0;
-
-    // Grab the raw CPU index array we just exposed
-    const unsigned char* rawIndexData = m_Model.GetIndexData();
-
-    for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
-    {
-        const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
-
-        // The amount we need to shift the local vertex IDs to make them global
-        uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
-
-        // Jump to the exact byte where this mesh's indices start, and cast to 16-bit ints
-        const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
-
-        for (uint32_t i = 0; i < mesh.indexCount; i += 3)
-        {
-            // Read 3 indices, shift them into global space, and store
-            globalTris[triOffset].i0 = cpuIndexData[i + 0] + baseVertex;
-            globalTris[triOffset].i1 = cpuIndexData[i + 1] + baseVertex;
-            globalTris[triOffset].i2 = cpuIndexData[i + 2] + baseVertex;
-
-            // Tag the triangle with its material so the shader knows which bindless texture to sample
-            globalTris[triOffset].materialIdx = mesh.materialIndex;
-
-            triOffset++;
-        }
-    }
-    // Allocate the buffer for the GPU!
-    m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
-
-
-    // 4. ALLOCATE ADAM BUFFERS
-    // Adam needs 2 float4s (mean, variance) per parameter. 
-    // Features: TotalVertices * 2 quartets (f0, f1)
-    // MLP: 53 quartets
-    struct AdamData { XMFLOAT4 mean; XMFLOAT4 variance; };
-    std::vector<AdamData> initialFeatureAdam(m_TotalVertices * 2, { {0,0,0,0}, {0,0,0,0} });
-    std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0} });
-    m_GateFeatureAdamBuffer.Create(L"Feature Adam Buffer", m_TotalVertices * 2, sizeof(AdamData), initialFeatureAdam.data());
-    m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
-
-
-    // 5. TRAINING ROOT SIGNATURE
-    m_GateTrainRootSig.Reset(10, 1);
-
-    // b0: Constants (10 DWORDs: step, tris, lr, eps, b1, b2, b1T, b2T, stride, uvOffset)
-    m_GateTrainRootSig[0].InitAsConstants(0, 10);
-
-    // SRVs
-    m_GateTrainRootSig[1].InitAsBufferSRV(0); // t0: TriangleBuffer
-    m_GateTrainRootSig[2].InitAsBufferSRV(1); // t1: VertexBuffer
-
-    // t2: Bindless Material Textures (Space 1)
-    m_GateTrainRootSig[3].InitAsDescriptorTable(1);
-    m_GateTrainRootSig[3].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
-
-    // UAVs
-    m_GateTrainRootSig[4].InitAsBufferUAV(0); // u0: Feature Buffer
-    m_GateTrainRootSig[5].InitAsBufferUAV(1); // u1: Feature Gradients
-    m_GateTrainRootSig[6].InitAsBufferUAV(2); // u2: Feature Adam
-    m_GateTrainRootSig[7].InitAsBufferUAV(3); // u3: MLP Buffer
-    m_GateTrainRootSig[8].InitAsBufferUAV(4); // u4: MLP Gradients
-    m_GateTrainRootSig[9].InitAsBufferUAV(5); // u5: MLP Adam
-
-    m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
-    m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
-
-    // Initialize the 3 PSOs (Assuming you compiled the shaders)
-    m_GateBackpropPSO.SetRootSignature(m_GateTrainRootSig);
-    m_GateBackpropPSO.SetComputeShader(g_pGateBackpropCS, sizeof(g_pGateBackpropCS));
-    m_GateBackpropPSO.Finalize();
-
-    m_GateOptMLPPSO.SetRootSignature(m_GateTrainRootSig);
-    m_GateOptMLPPSO.SetComputeShader(g_pGateOptimizeMLPCS, sizeof(g_pGateOptimizeMLPCS));
-    m_GateOptMLPPSO.Finalize();
-
-    m_GateOptFeatPSO.SetRootSignature(m_GateTrainRootSig);
-    m_GateOptFeatPSO.SetComputeShader(g_pGateOptimizeFeaturesCS, sizeof(g_pGateOptimizeFeaturesCS));
-    m_GateOptFeatPSO.Finalize();
-
-
-    // Calculate the UV offset based on your D3D12_INPUT_ELEMENT_DESC
-    // POSITION is RGB32_FLOAT (12 bytes), so TEXCOORD starts at byte 12.
-    /*ComputeContext& cptContext = ComputeContext::Begin(L"Encode Colors into Features");
-
-    cptContext.SetRootSignature(m_EncodeColorRootSig);
-    cptContext.SetPipelineState(m_EncodeColorPSO);
-    cptContext.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
-
-    // Bind Constants
-    uint32_t uvOffset = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].offset;
-    cptContext.SetConstants(0, totalTriangles, VertexStride, uvOffset);
-
-    // Bind Buffers via GPU Virtual Addresses
-    cptContext.GetCommandList()->SetComputeRootShaderResourceView(1, m_Model.GetVertexBuffer().BufferLocation);
-    cptContext.GetCommandList()->SetComputeRootShaderResourceView(2, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
-    cptContext.GetCommandList()->SetComputeRootShaderResourceView(3, m_VertexMaterialMap.GetGpuVirtualAddress());
-    cptContext.SetBufferUAV(4, m_GateFeatureBuffer);
-
-    // NEW: Bind the ENTIRE texture heap to Root Parameter 5!
-    cptContext.SetDescriptorTable(5, m_Model.GetSRVs(0));
-
-    // One single dispatch for the entire scene!
-    uint32_t threadGroups = Math::DivideByMultiple(totalTriangles, 64);
-    cptContext.Dispatch(threadGroups, 1, 1);
-
-    cptContext.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    cptContext.Finish(true);*/
-
-
+    m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
+    m_Gate.Startup(m_Model, g_SceneColorBuffer.GetFormat(), g_SceneDepthBuffer.GetFormat());
 
     // The caller of this function can override which materials are considered cutouts
     m_pMaterialIsCutout.resize(m_Model.GetMaterialCount());
@@ -416,6 +177,7 @@ void Sponza::Cleanup( void )
     m_Model.Clear();
     Lighting::Shutdown();
     TextureManager::Shutdown();
+    m_Gate.Cleanup();
 }
 
 void Sponza::RenderObjects( GraphicsContext& gfxContext, const Matrix4& ViewProjMat, const Vector3& viewerPos, eObjectFilter Filter )
@@ -489,97 +251,14 @@ void Sponza::RenderLightShadows(GraphicsContext& gfxContext, const Camera& camer
     ++LightIndex;
 }
 
-void Sponza::RenderScene(
-    GraphicsContext& gfxContext,
-    const Camera& camera,
-    const D3D12_VIEWPORT& viewport,
-    const D3D12_RECT& scissor,
-    bool skipDiffusePass,
-    bool skipShadowMap,
-    bool renderGateToViewport,
-    int  numMeshesRendered)
+void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, const D3D12_VIEWPORT& viewport,
+    const D3D12_RECT& scissor, bool skipDiffusePass, bool skipShadowMap, bool renderGateToViewport, int numMeshesRendered)
 {
     Renderer::UpdateGlobalDescriptors();
 
-
-    // --- GATE LIVE TRAINING LOOP ---
-    static uint32_t trainingStep = 1;
-    static float adamBeta1T = 0.9f;
-    static float adamBeta2T = 0.999f;
-
-    // Hyperparameters
-    float learningRate = 0.001f;
-    float adamEpsilon = 1e-8f;
-    float adamBeta1 = 0.9f;
-    float adamBeta2 = 0.999f;
-    uint32_t uvOffset = m_Model.GetMesh(0).attrib[ModelH3D::attrib_texcoord0].offset;
-    uint32_t VertexStride = m_Model.GetVertexStride();
-
     ComputeContext& trainCtx = ComputeContext::Begin(L"GATE Training");
-
-    trainCtx.SetRootSignature(m_GateTrainRootSig);
-    trainCtx.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
-
-    // Bind Constants
-    struct TrainingConstants {
-        uint32_t trainingStep;
-        uint32_t totalTriangles;
-        float learningRate;
-        float adamEpsilon;
-        float adamBeta1;
-        float adamBeta2;
-        float adamBeta1T;
-        float adamBeta2T;
-        uint32_t VertexStride;
-        uint32_t uvOffset;
-    } cb = {
-        trainingStep, m_TotalTriangles, learningRate, adamEpsilon,
-        adamBeta1, adamBeta2, adamBeta1T, adamBeta2T, VertexStride, uvOffset
-    };
-
-    // 2. Upload them all at once! (Root Index 0, 10 DWORDs, pointer to data)
-    trainCtx.SetConstantArray(0, 10, &cb);
-
-    // Bind SRVs
-    trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
-    trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model.GetVertexBuffer().BufferLocation);
-    trainCtx.SetDescriptorTable(3, m_Model.GetSRVs(0)); // Bindless Textures
-
-    // Bind UAVs
-    trainCtx.SetBufferUAV(4, m_GateFeatureBuffer);
-    trainCtx.SetBufferUAV(5, m_GateFeatureGradientBuffer);
-    trainCtx.SetBufferUAV(6, m_GateFeatureAdamBuffer);
-    trainCtx.SetBufferUAV(7, m_GateMLPBuffer);
-    trainCtx.SetBufferUAV(8, m_GateMLPGradientBuffer);
-    trainCtx.SetBufferUAV(9, m_GateMLPAdamBuffer);
-
-    // 1. BACKPROP PASS (E.g., process 65,536 random triangles per frame)
-    trainCtx.SetPipelineState(m_GateBackpropPSO);
-    trainCtx.Dispatch(1024, 1, 1);
-
-    // Barrier: Wait for all gradients to finish accumulating
-    trainCtx.InsertUAVBarrier(m_GateFeatureGradientBuffer);
-    trainCtx.InsertUAVBarrier(m_GateMLPGradientBuffer);
-
-    // 2. OPTIMIZE MLP PASS
-    trainCtx.SetPipelineState(m_GateOptMLPPSO);
-    trainCtx.Dispatch(1, 1, 1); // 64 threads is enough for 53 parameters
-
-    // 3. OPTIMIZE FEATURES PASS
-    trainCtx.SetPipelineState(m_GateOptFeatPSO);
-    trainCtx.Dispatch(Math::DivideByMultiple(m_TotalVertices * 2, 64), 1, 1);
-
-    // Barrier: Ensure features and MLP are updated before Graphics queue reads them
-    trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
+    m_Gate.Train(trainCtx);
     trainCtx.Finish();
-
-    // Update Adam exponents for the next frame
-    trainingStep++;
-    adamBeta1T *= adamBeta1;
-    adamBeta2T *= adamBeta2;
-    // -------------------------------
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
 
@@ -725,40 +404,7 @@ void Sponza::RenderScene(
 
     {
         ScopedTimer _prof2(L"Render GATE Visualization", gfxContext);
-
         ColorBuffer& targetBuffer = renderGateToViewport ? g_SceneColorBuffer : m_GateColorBuffer;
-
-        gfxContext.TransitionResource(targetBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
-        gfxContext.ClearColor(targetBuffer);
-
-        gfxContext.SetPipelineState(m_GatePSO);
-        gfxContext.SetRootSignature(m_GateRootSig);
-
-        Matrix4 wvp = camera.GetViewProjMatrix();
-        gfxContext.SetDynamicConstantBufferView(0, sizeof(wvp), &wvp);
-        gfxContext.SetBufferSRV(1, m_GateFeatureBuffer);
-        gfxContext.SetBufferSRV(2, m_GateMLPBuffer);
-
-        D3D12_CPU_DESCRIPTOR_HANDLE gateRTVs[] = { targetBuffer.GetRTV() };
-        gfxContext.SetRenderTargets(1, gateRTVs, g_SceneDepthBuffer.GetDSV_DepthReadOnly());
-        gfxContext.SetViewportAndScissor(viewport, scissor);
-
-        // 4. Draw the geometry cleanly, ignoring Sponza materials entirely
-        uint32_t VertexStride = m_Model.GetVertexStride();
-        for (uint32_t meshIndex = 0; meshIndex < m_Model.GetMeshCount(); ++meshIndex)
-        {
-            const ModelH3D::Mesh& mesh = m_Model.GetMesh(meshIndex);
-
-            uint32_t indexCount = mesh.indexCount;
-            uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
-            uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
-
-            // NEW: Push the baseVertex to Root Parameter 3 (which maps to b1)
-            gfxContext.SetConstants(3, baseVertex);
-
-            gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
-        }
-
-        gfxContext.TransitionResource(targetBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, true);
+        m_Gate.RenderVisualization(gfxContext, camera, targetBuffer, g_SceneDepthBuffer, viewport, scissor);
     }
 }

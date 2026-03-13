@@ -1350,6 +1350,8 @@ namespace GameCore
 void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
 {
     // Begin the ImGui window
+    Sponza::m_Gate.RenderGUI();
+
     ImGui::Begin("MiniEngine Raytracing Controls");
 
     // 1. Raytracing Mode Selection

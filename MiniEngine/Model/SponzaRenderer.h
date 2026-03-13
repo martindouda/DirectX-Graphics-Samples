@@ -14,6 +14,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include "Gate.h"
 
 class GraphicsContext;
 class ShadowCamera;
@@ -48,5 +49,6 @@ namespace Sponza
     extern ExpVar m_AmbientIntensity;
     extern ExpVar m_SunLightIntensity;
 
+    extern Gate m_Gate;
     extern ColorBuffer m_GateColorBuffer;
 }

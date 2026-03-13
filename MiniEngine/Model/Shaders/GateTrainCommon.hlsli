@@ -3,21 +3,14 @@
 // =========================================================================
 //   Thread Group Sizes
 // =========================================================================
+
 #define BACKPROP_THREADGROUP_SIZE 64
 #define OPTIMIZATION_THREADGROUP_SIZE 64
 
 // =========================================================================
-//   Shared Structs
-// =========================================================================
-struct AdamData
-{
-    float4 mean;
-    float4 variance;
-};
-
-// =========================================================================
 //   Network Configuration (8 -> 16 -> 4)
 // =========================================================================
+
 #define LAYER_COUNT 3
 #define INPUT_LAYER 0
 #define HIDDEN_LAYER 1
@@ -28,6 +21,31 @@ struct AdamData
 
 #define LEAKY_RELU_SLOPE 0.01f
 #define FLOAT4_PACKING_CONSTANT 16384.0f // Scale for fixed-point atomic addition
+
+// =========================================================================
+//   Structs
+// =========================================================================
+
+struct AdamData
+{
+    float4 mean, variance;
+};
+
+struct GlobalTriangle
+{
+    uint i0, i1, i2, materialIdx;
+};
+
+struct GateFeature
+{
+    float4 data[2];
+};
+
+struct GateEncodingData
+{
+    float3 barycentrics;
+    uint3 indices;
+};
 
 // =========================================================================
 //   Resources
@@ -47,14 +65,18 @@ cbuffer RootConstantsCB : register(b0)
     uint uvOffset;
 };
 
-// Sponza Geometry & Target
-struct GlobalTriangle
-{
-    uint i0;
-    uint i1;
-    uint i2;
-    uint materialIdx;
-};
+#ifdef GATE_INFERENCE
+// -------------------------------------------------------------------------
+//   INFERENCE RESOURCES
+// -------------------------------------------------------------------------
+
+StructuredBuffer<GateFeature> featureBuffer : register(t0);
+StructuredBuffer<float4> MLPParameterBuffer : register(t1);
+
+#else
+// -------------------------------------------------------------------------
+//   TRAINING RESOURCES
+// -------------------------------------------------------------------------
 
 StructuredBuffer<GlobalTriangle> TriangleBuffer : register(t0);
 ByteAddressBuffer VertexUVBuffer : register(t1);
@@ -62,10 +84,6 @@ Texture2D<float4> BindlessTextures[] : register(t0, space1);
 SamplerState LinearSampler : register(s0);
 
 // GATE Features (Per-Vertex)
-struct GateFeature
-{
-    float4 data[2];
-};
 RWStructuredBuffer<GateFeature> GateFeatureBuffer : register(u0);
 RWStructuredBuffer<int4> GateFeatureGradientBuffer : register(u1);
 RWStructuredBuffer<AdamData> GateFeatureAdamBuffer : register(u2);
@@ -74,6 +92,7 @@ RWStructuredBuffer<AdamData> GateFeatureAdamBuffer : register(u2);
 RWStructuredBuffer<float4> MLPParameterBuffer : register(u3);
 RWStructuredBuffer<int4> MLPGradientBuffer : register(u4);
 RWStructuredBuffer<AdamData> MLPAdamBuffer : register(u5);
+#endif
 
 // =========================================================================
 //   Helpers: RNG & Float Packing
@@ -98,24 +117,14 @@ float4 unpackFloat4(int4 x)
 {
     return float4(x) / FLOAT4_PACKING_CONSTANT;
 }
+
 int4 packFloat4(float4 x)
 {
     return int4(x * FLOAT4_PACKING_CONSTANT);
 }
 
-void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint gradientIndex, float4 gradient)
-{
-    // Clip gradients to prevent exploding loss
-    gradient = clamp(gradient, -0.5f, 0.5f);
-    const int4 packed = packFloat4(gradient);
-    InterlockedAdd(gradientTarget[gradientIndex].x, packed.x);
-    InterlockedAdd(gradientTarget[gradientIndex].y, packed.y);
-    InterlockedAdd(gradientTarget[gradientIndex].z, packed.z);
-    InterlockedAdd(gradientTarget[gradientIndex].w, packed.w);
-}
-
 // =========================================================================
-//   Activations
+//   Activations (Shared)
 // =========================================================================
 
 float4 activationFunction(float4 v)
@@ -127,6 +136,7 @@ float4 activationFunction(float4 v)
         (v.w >= 0.0f) ? v.w : (v.w * LEAKY_RELU_SLOPE)
     );
 }
+
 float4 activationFunctionDeriv(float4 v)
 {
     return float4(
@@ -137,25 +147,31 @@ float4 activationFunctionDeriv(float4 v)
     );
 }
 
-// Output uses Sigmoid to clamp color 0.0 -> 1.0
 float4 activationFunctionOutput(float4 v)
 {
     return 1.0f / (1.0f + exp(-v));
 }
+
 float4 activationFunctionOutputDeriv(float4 v)
 {
     return v * (1.0f - v);
 }
 
+#ifndef GATE_INFERENCE
 // =========================================================================
-//   GATE Encoding (Barycentric Interpolation)
+//   TRAINING ONLY FUNCTIONS
 // =========================================================================
 
-struct GateEncodingData
+void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint gradientIndex, float4 gradient)
 {
-    float3 barycentrics;
-    uint3 indices;
-};
+    // Clip gradients to prevent exploding loss
+    gradient = clamp(gradient, -0.5f, 0.5f);
+    const int4 packed = packFloat4(gradient);
+    InterlockedAdd(gradientTarget[gradientIndex].x, packed.x);
+    InterlockedAdd(gradientTarget[gradientIndex].y, packed.y);
+    InterlockedAdd(gradientTarget[gradientIndex].z, packed.z);
+    InterlockedAdd(gradientTarget[gradientIndex].w, packed.w);
+}
 
 void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK])
 {
@@ -182,10 +198,6 @@ void gateEncodingBackprop(const GateEncodingData gateData, inout float4 errors[A
     accumulateGradient(GateFeatureGradientBuffer, gateData.indices.z * 2 + 1, inputGrad1 * gateData.barycentrics.z);
 }
 
-// =========================================================================
-//   MLP Forward / Backward Layers
-// =========================================================================
-
 void evalLayerActivations(inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], uint weightOffset, uint prevNeuronOffset, uint currNeuronOffset, uint currQuartets, uint prevQuartets, uint layerType)
 {
     for (uint q = 0; q < currQuartets; q++)
@@ -208,24 +220,12 @@ void backpropLayer(const float3 target, inout float4 activations[ACTIVATION_QUAR
 {
     // Initialize the previous layer's error to 0 so we can accumulate the transposed weights into it
     for (uint pq = prevOffset; pq < prevOffset + prevLayerQuartets; pq++)
-    {
         errors[pq] = 0.0f;
-    }
 
     for (uint q = currOffset; q < currOffset + currLayerQuartets; q++)
     {
         const float4 act = activations[q];
-        float4 dCost_O = 0.0f;
-
-        if (layerType == OUTPUT_LAYER)
-        {
-            dCost_O = (act - float4(target, 0.0f)); // L2 Loss Derivative
-        }
-        else
-        {
-            dCost_O = errors[q]; // Read accumulated errors from the layer above
-        }
-
+        float4 dCost_O = (layerType == OUTPUT_LAYER) ? (act - float4(target, 0.0f)) : errors[q];
         const float4 dCost_Z = dCost_O * ((layerType == HIDDEN_LAYER) ? activationFunctionDeriv(act) : activationFunctionOutputDeriv(act));
         
         // Weights Gradient & Error Backprop
@@ -260,4 +260,30 @@ float4 ApplyAdam(float4 gradient, inout AdamData adamData)
     float4 correctedMean = adamData.mean / (1.0f - adamBeta1T);
     float4 correctedVariance = adamData.variance / (1.0f - adamBeta2T);
     return -learningRate * (correctedMean * rsqrt(correctedVariance + adamEpsilon));
+}
+#endif // !GATE_INFERENCE
+
+// =========================================================================
+//   MLP Forward Layer (Inference / Optimized)
+// =========================================================================
+
+void evalLayer(inout float4 previousActivations[MAX_NEURON_QUARTETS_PER_LAYER], inout float4 currentActivations[MAX_NEURON_QUARTETS_PER_LAYER],
+    uint paramOffset, const uint neuronQuartetCountCurrentLayer, const uint neuronQuartetCountPreviousLayer, const uint layerType)
+{
+    for (uint neuronQuartet = 0; neuronQuartet < neuronQuartetCountCurrentLayer; neuronQuartet++)
+    {
+        float4 neuronValue = 0.0f;
+        
+        for (uint previousNeuronQuartet = 0; previousNeuronQuartet < neuronQuartetCountPreviousLayer; previousNeuronQuartet++)
+        {
+            const float4 prevAct = previousActivations[previousNeuronQuartet];
+            neuronValue.x += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.y += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.z += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.w += dot(MLPParameterBuffer[paramOffset++], prevAct);
+        }
+        
+        const float4 bias = MLPParameterBuffer[paramOffset++];
+        currentActivations[neuronQuartet] = (layerType == HIDDEN_LAYER) ? activationFunction(neuronValue + bias) : currentActivations[neuronQuartet] = activationFunctionOutput(neuronValue + bias);
+    }
 }
