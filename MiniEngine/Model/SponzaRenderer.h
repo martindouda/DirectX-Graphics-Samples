@@ -39,8 +39,7 @@ namespace Sponza
         const D3D12_RECT& scissor,
         bool skipDiffusePass = false,
         bool skipShadowMap = false,
-        bool renderGate = false,
-        int numMeshesRendered = 100);
+        bool renderGate = false);
 
     const ModelH3D& GetModel();
 
@@ -50,5 +49,4 @@ namespace Sponza
     extern ExpVar m_SunLightIntensity;
 
     extern Gate m_Gate;
-    extern ColorBuffer m_GateColorBuffer;
 }

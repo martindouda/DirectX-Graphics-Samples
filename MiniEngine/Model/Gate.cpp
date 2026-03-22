@@ -15,11 +15,8 @@ using namespace Graphics;
 namespace Sponza
 {
     Gate::Gate() :
-        m_GatePSO(L"GATE: Forward PSO"),
-        m_GateBackpropPSO(L"GATE: Backprop"),
-        m_GateOptMLPPSO(L"GATE: Optimize MLP"),
-        m_GateOptFeatPSO(L"GATE: Optimize Features"),
-        m_EncodeColorPSO(L"GATE: Encode UVs CS")
+        m_GatePSO(L"GATE: Forward PSO"), m_GateBackpropPSO(L"GATE: Backprop"), m_GateOptMLPPSO(L"GATE: Optimize MLP"),
+		m_GateOptFeatPSO(L"GATE: Optimize Features"), m_EncodeColorPSO(L"GATE: Encode UVs CS"), m_Model(nullptr)
     {
     }
 
@@ -31,10 +28,9 @@ namespace Sponza
     void Gate::Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
 		m_Model = &model;
+        m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
 
-        // -------------------------------------------------------------------------
         // 1. Setup Inference PSO
-        // -------------------------------------------------------------------------
         m_GateRootSig.Reset(4, 0);
         m_GateRootSig[0].InitAsConstantBuffer(0);
         m_GateRootSig[1].InitAsBufferSRV(0);
@@ -61,9 +57,7 @@ namespace Sponza
         m_GatePSO.SetPixelShader(g_pGatePS, sizeof(g_pGatePS));
         m_GatePSO.Finalize();
 
-        // -------------------------------------------------------------------------
         // 2. Setup Training Root Sig & PSOs
-        // -------------------------------------------------------------------------
         m_GateTrainRootSig.Reset(10, 1);
         m_GateTrainRootSig[0].InitAsConstants(0, 10);
         m_GateTrainRootSig[1].InitAsBufferSRV(0);
@@ -91,9 +85,7 @@ namespace Sponza
         m_GateOptFeatPSO.SetComputeShader(g_pGateOptimizeFeaturesCS, sizeof(g_pGateOptimizeFeaturesCS));
         m_GateOptFeatPSO.Finalize();
 
-        // -------------------------------------------------------------------------
         // 3. Buffer Allocation
-        // -------------------------------------------------------------------------
         uint32_t VertexStride = model.GetVertexStride();
         m_TotalVertices = model.GetVertexBuffer().SizeInBytes / VertexStride;
 
@@ -160,7 +152,8 @@ namespace Sponza
         trainCtx.SetRootSignature(m_GateTrainRootSig);
         trainCtx.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
 
-        struct TrainingConstants {
+        struct TrainingConstants 
+        {
             uint32_t trainingStep;
             uint32_t totalTriangles;
             float learningRate;
@@ -208,12 +201,11 @@ namespace Sponza
         m_AdamBeta2T *= m_AdamBeta2;
     }
 
-    void Gate::RenderVisualization(GraphicsContext& gfxContext, const Camera& camera,
-        ColorBuffer& targetBuffer, DepthBuffer& depthBuffer,
+    void Gate::RenderVisualization(GraphicsContext& gfxContext, const Camera& camera, DepthBuffer& depthBuffer,
         const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor)
     {
-        gfxContext.TransitionResource(targetBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
-        gfxContext.ClearColor(targetBuffer);
+        gfxContext.TransitionResource(m_GateColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
+        gfxContext.ClearColor(m_GateColorBuffer);
 
         gfxContext.SetPipelineState(m_GatePSO);
         gfxContext.SetRootSignature(m_GateRootSig);
@@ -223,7 +215,7 @@ namespace Sponza
         gfxContext.SetBufferSRV(1, m_GateFeatureBuffer);
         gfxContext.SetBufferSRV(2, m_GateMLPBuffer);
 
-        D3D12_CPU_DESCRIPTOR_HANDLE gateRTVs[] = { targetBuffer.GetRTV() };
+        D3D12_CPU_DESCRIPTOR_HANDLE gateRTVs[] = { m_GateColorBuffer.GetRTV() };
         gfxContext.SetRenderTargets(1, gateRTVs, depthBuffer.GetDSV_DepthReadOnly());
         gfxContext.SetViewportAndScissor(viewport, scissor);
 
@@ -239,7 +231,7 @@ namespace Sponza
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
         }
 
-        gfxContext.TransitionResource(targetBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, true);
+        gfxContext.TransitionResource(m_GateColorBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, true);
     }
 
     void Gate::RenderGUI()

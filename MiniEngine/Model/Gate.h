@@ -23,8 +23,7 @@ namespace Sponza
         void Train(ComputeContext& trainCtx);
 
         // Renders the forward pass (inference) to a target buffer
-        void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera,
-            ColorBuffer& targetBuffer, DepthBuffer& depthBuffer,
+        void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
             const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor);
 
         // Draws the ImGui interface
@@ -35,6 +34,8 @@ namespace Sponza
 
 
         void Cleanup();
+
+		inline const ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
 
     private:
         struct GlobalTriangle
@@ -75,6 +76,7 @@ namespace Sponza
         // Inference
         GraphicsPSO m_GatePSO;
         RootSignature m_GateRootSig;
+        ColorBuffer m_GateColorBuffer;
 
         // Training
         RootSignature m_GateTrainRootSig;

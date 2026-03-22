@@ -71,7 +71,6 @@ namespace Sponza
     NumVar ShadowDimZ("Sponza/Lighting/Shadow Dim Z", 3000, 1000, 10000, 100 );
 
     Gate m_Gate;
-    ColorBuffer m_GateColorBuffer;
 }
 
 void Sponza::Startup(Camera& Camera)
@@ -140,7 +139,6 @@ void Sponza::Startup(Camera& Camera)
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
 
 
-    m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
     m_Gate.Startup(m_Model, g_SceneColorBuffer.GetFormat(), g_SceneDepthBuffer.GetFormat());
 
     // The caller of this function can override which materials are considered cutouts
@@ -252,7 +250,7 @@ void Sponza::RenderLightShadows(GraphicsContext& gfxContext, const Camera& camer
 }
 
 void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, const D3D12_VIEWPORT& viewport,
-    const D3D12_RECT& scissor, bool skipDiffusePass, bool skipShadowMap, bool renderGateToViewport, int numMeshesRendered)
+    const D3D12_RECT& scissor, bool skipDiffusePass, bool skipShadowMap, bool renderGateToViewport)
 {
     Renderer::UpdateGlobalDescriptors();
 
@@ -404,7 +402,6 @@ void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, cons
 
     {
         ScopedTimer _prof2(L"Render GATE Visualization", gfxContext);
-        ColorBuffer& targetBuffer = renderGateToViewport ? g_SceneColorBuffer : m_GateColorBuffer;
-        m_Gate.RenderVisualization(gfxContext, camera, targetBuffer, g_SceneDepthBuffer, viewport, scissor);
+        m_Gate.RenderVisualization(gfxContext, camera, g_SceneDepthBuffer, viewport, scissor);
     }
 }

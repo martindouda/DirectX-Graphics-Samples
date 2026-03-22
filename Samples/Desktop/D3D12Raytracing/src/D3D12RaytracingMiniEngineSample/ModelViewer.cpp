@@ -62,8 +62,6 @@ using namespace Graphics;
 
 using Microsoft::WRL::ComPtr;
 
-int g_NumMeshesRendered = 100;
-
 
 namespace Sponza
 {
@@ -1018,7 +1016,7 @@ void D3D12RaytracingMiniEngineSample::RenderScene()
     const D3D12_VIEWPORT& viewport = m_MainViewport;
     const D3D12_RECT& scissor = m_MainScissor;
 
-    Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor, skipDiffusePass, skipShadowMap, rayTracingMode == RTM_GATE, g_NumMeshesRendered);
+    Sponza::RenderScene(gfxContext, m_Camera, viewport, scissor, skipDiffusePass, skipShadowMap, rayTracingMode == RTM_GATE);
 
     // Some systems generate a per-pixel velocity buffer to better track dynamic and skinned meshes.  Everything
     // is static in our scene, so we generate velocity from camera motion and the depth buffer.  A velocity buffer
@@ -1387,8 +1385,6 @@ void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::SliderInt("Number of Meshes Rendered", &g_NumMeshesRendered, 0, 100);
-
     // 3. Camera Controls
     ImGui::Text("Camera Controls");
     int camPos = (int)m_CameraPosArrayCurrentPosition;
@@ -1412,8 +1408,8 @@ void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
     ImGui::Spacing();
     ImGui::Text("GATE Visualization");
 
-    float texWidth = (float)Sponza::m_GateColorBuffer.GetWidth();
-    float texHeight = (float)Sponza::m_GateColorBuffer.GetHeight();
+    float texWidth = (float)Sponza::m_Gate.GetGateColorBuffer().GetWidth();
+    float texHeight = (float)Sponza::m_Gate.GetGateColorBuffer().GetHeight();
     float windowWidth = ImGui::GetContentRegionAvail().x;
     float scale = windowWidth / texWidth;
     ImVec2 imageSize = ImVec2(texWidth * scale, texHeight * scale);
@@ -1430,12 +1426,7 @@ void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
     destGpuHandle.ptr += descriptorSize * 1;
 
     // Ask the GPU to copy our ColorBuffer's CPU descriptor into the ImGui GPU heap
-    Graphics::g_Device->CopyDescriptorsSimple(
-        1,
-        destCpuHandle,
-        Sponza::m_GateColorBuffer.GetSRV(),
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-    );
+    Graphics::g_Device->CopyDescriptorsSimple(1, destCpuHandle, Sponza::m_Gate.GetGateColorBuffer().GetSRV(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     // Pass the GPU pointer to ImGui!
     ImTextureID texID = (ImTextureID)destGpuHandle.ptr;
