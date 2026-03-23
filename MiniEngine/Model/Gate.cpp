@@ -60,7 +60,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(11, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 11); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 12); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
         // NEW SLOT: Visibility Buffer (register t2, space0)
@@ -180,7 +180,8 @@ namespace Sponza
         {
             uint32_t trainingStep;
             uint32_t totalTriangles;
-            float learningRate;
+            float featureLearningRate;
+            float mlpLearningRate;
             float adamEpsilon;
             float adamBeta1;
             float adamBeta2;
@@ -190,11 +191,11 @@ namespace Sponza
             uint32_t screenHeight;
             int CustomInt0;
         } cb = {
-            m_TrainingStep, m_TotalTriangles, m_LearningRate, m_AdamEpsilon,
+            m_TrainingStep, m_TotalTriangles, m_FeatureLearningRate, m_MLPLearningRate, m_AdamEpsilon,
 			m_AdamBeta1, m_AdamBeta2, VertexStride, uvOffset, 
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_CustomInt0
         };
-        trainCtx.SetConstantArray(0, 11, &cb);
+        trainCtx.SetConstantArray(0, 12, &cb);
 
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
@@ -297,7 +298,8 @@ namespace Sponza
 
         ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 8192, "%d groups");
         // Logarithmic slider is great for learning rates
-        ImGui::SliderFloat("Learning Rate", &m_LearningRate, 0.00001f, 0.05f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Feature Learning Rate", &m_FeatureLearningRate, 0.0001f, 0.1f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("MLP Learning Rate", &m_MLPLearningRate, 0.00001f, 0.01f, "%.6f", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("Adam Beta 1", &m_AdamBeta1, 0.8f, 0.999f, "%.4f");
         ImGui::SliderFloat("Adam Beta 2", &m_AdamBeta2, 0.9f, 0.9999f, "%.5f");
         ImGui::SliderFloat("Adam Epsilon", &m_AdamEpsilon, 1e-8f, 1e-4f, "%.8f", ImGuiSliderFlags_Logarithmic);

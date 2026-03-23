@@ -57,7 +57,8 @@ cbuffer RootConstantsCB : register(b0)
 {
     uint trainingStep;
     uint totalTriangles;
-    float learningRate;
+    float featureLearningRate;
+    float mlpLearningRate;
     float adamEpsilon;
     float adamBeta1;
     float adamBeta2;
@@ -257,7 +258,7 @@ void backpropLayer(const float3 target, inout float4 activations[ACTIVATION_QUAR
     }
 }
 
-float4 ApplyAdam(float4 gradient, inout AdamData adamData)
+float4 ApplyAdam(float4 gradient, inout AdamData adamData, float learningRate)
 {
     // 1. Advance the local training timeline
     adamData.stepCount += 1;

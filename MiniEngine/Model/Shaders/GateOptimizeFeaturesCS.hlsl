@@ -24,7 +24,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     AdamData adam = GateFeatureAdamBuffer[index];
     
     // Read, add the Adam optimization step, and write directly back to the nested array
-    GateFeatureBuffer[vertexIndex].data[dataIndex] += ApplyAdam(gradient, adam);
+    GateFeatureBuffer[vertexIndex].data[dataIndex] += ApplyAdam(gradient, adam, featureLearningRate);
     
     // Save updated Adam state and zero out the gradient for the next training batch
     GateFeatureAdamBuffer[index] = adam;

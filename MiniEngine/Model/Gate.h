@@ -94,7 +94,8 @@ namespace Sponza
         // --- Hyperparameters & Training State ---
         uint32_t m_TrainingStep = 1;
 
-        float m_LearningRate = 0.001f;
+        float m_FeatureLearningRate = 0.05f;
+        float m_MLPLearningRate = 0.002f;
         float m_AdamEpsilon = 1e-8f;
         float m_AdamBeta1 = 0.9f;
         float m_AdamBeta2 = 0.999f;
