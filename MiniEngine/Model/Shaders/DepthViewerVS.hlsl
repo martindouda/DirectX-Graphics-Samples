@@ -1,3 +1,5 @@
+// DepthViewerVS.hlsl
+
 //
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
@@ -15,7 +17,9 @@
 
 cbuffer VSConstants : register(b0)
 {
-    float4x4 WVP;
+    float4x4 modelToProjection;
+    float4x4 modelToShadow;
+    float3 ViewerPos;
 };
 
 struct VSInput
@@ -34,7 +38,7 @@ struct VSOutput
 VSOutput main(VSInput vsInput)
 {
     VSOutput vsOutput;
-    vsOutput.pos = mul(WVP, float4(vsInput.pos, 1.0));
+    vsOutput.pos = mul(modelToProjection, float4(vsInput.pos, 1.0));
     vsOutput.uv = vsInput.uv;
     return vsOutput;
 }

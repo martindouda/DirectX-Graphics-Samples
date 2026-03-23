@@ -71,6 +71,7 @@ namespace Sponza
     NumVar ShadowDimZ("Sponza/Lighting/Shadow Dim Z", 3000, 1000, 10000, 100 );
 
     Gate m_Gate;
+    ColorBuffer m_VisibilityBuffer;
 }
 
 void Sponza::Startup(Camera& Camera)
@@ -90,16 +91,17 @@ void Sponza::Startup(Camera& Camera)
     };
 
 
-
-    // Depth-only (2x rate)
+    DXGI_FORMAT visibilityFormat = DXGI_FORMAT_R32_UINT;
+    // Depth-only
     m_DepthPSO.SetRootSignature(Renderer::m_RootSig);
     m_DepthPSO.SetRasterizerState(RasterizerDefault);
-    m_DepthPSO.SetBlendState(BlendNoColorWrite);
+    m_DepthPSO.SetBlendState(BlendDisable);
     m_DepthPSO.SetDepthStencilState(DepthStateReadWrite);
     m_DepthPSO.SetInputLayout(_countof(vertElem), vertElem);
     m_DepthPSO.SetPrimitiveTopologyType(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE);
-    m_DepthPSO.SetRenderTargetFormats(0, nullptr, DepthFormat);
+    m_DepthPSO.SetRenderTargetFormats(1, &visibilityFormat, DepthFormat);
     m_DepthPSO.SetVertexShader(g_pDepthViewerVS, sizeof(g_pDepthViewerVS));
+    m_DepthPSO.SetPixelShader(g_pDepthViewerPS, sizeof(g_pDepthViewerPS));
     m_DepthPSO.Finalize();
 
     // Depth-only shading but with alpha testing
@@ -139,6 +141,7 @@ void Sponza::Startup(Camera& Camera)
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
 
 
+    m_VisibilityBuffer.Create(L"Visibility Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R32_UINT);
     m_Gate.Startup(m_Model, g_SceneColorBuffer.GetFormat(), g_SceneDepthBuffer.GetFormat());
 
     // The caller of this function can override which materials are considered cutouts
@@ -192,7 +195,13 @@ void Sponza::RenderObjects( GraphicsContext& gfxContext, const Matrix4& ViewProj
 
     gfxContext.SetDynamicConstantBufferView(Renderer::kMeshConstants, sizeof(vsConstants), &vsConstants);
 
-    __declspec(align(16)) uint32_t materialIdx = 0xFFFFFFFFul;
+    __declspec(align(16)) struct PerMeshConstants
+    {
+        uint32_t materialIdx;
+        uint32_t globalTriangleOffset;
+    };
+    uint32_t currentMaterialIdx = 0xFFFFFFFFul;
+    uint32_t globalTriangleOffset = 0;
 
     uint32_t VertexStride = m_Model.GetVertexStride();
 
@@ -204,19 +213,30 @@ void Sponza::RenderObjects( GraphicsContext& gfxContext, const Matrix4& ViewProj
         uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
         uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
 
-        if (mesh.materialIndex != materialIdx)
+        // Filter check: If this mesh doesn't belong in the current pass, skip drawing
+        if (m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kCutout) ||
+            !m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kOpaque))
         {
-            if ( m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kCutout) ||
-                !m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kOpaque) )
-                continue;
-
-            materialIdx = mesh.materialIndex;
-            gfxContext.SetDescriptorTable(Renderer::kMaterialSRVs, m_Model.GetSRVs(materialIdx));
-
-            gfxContext.SetDynamicConstantBufferView(Renderer::kCommonCBV, sizeof(uint32_t), &materialIdx);
+            // CRITICAL: Still increment the offset so subsequent meshes get the correct ID!
+            globalTriangleOffset += (indexCount / 3);
+            continue;
         }
 
+        // Only update the SRV descriptor table when the material actually changes
+        if (mesh.materialIndex != currentMaterialIdx)
+        {
+            currentMaterialIdx = mesh.materialIndex;
+            gfxContext.SetDescriptorTable(Renderer::kMaterialSRVs, m_Model.GetSRVs(currentMaterialIdx));
+        }
+
+        // Update the CBV every mesh to pass the new offset
+        PerMeshConstants meshCB = { currentMaterialIdx, globalTriangleOffset };
+        gfxContext.SetDynamicConstantBufferView(Renderer::kCommonCBV, sizeof(meshCB), &meshCB);
+
         gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
+
+        // Increment for the next mesh
+        globalTriangleOffset += (indexCount / 3);
     }
 }
 
@@ -256,7 +276,7 @@ void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, cons
 
     ComputeContext& trainCtx = ComputeContext::Begin(L"GATE Training");
     if (renderGateToViewport)
-        m_Gate.Train(trainCtx);
+        m_Gate.Train(trainCtx, m_VisibilityBuffer);
     trainCtx.Finish();
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
@@ -310,26 +330,33 @@ void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, cons
     {
         ScopedTimer _prof(L"Z PrePass", gfxContext);
 
+        // Transition the visibility buffer to a Render Target
+        gfxContext.TransitionResource(m_VisibilityBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
+
+        // Clear both Depth and Visibility
+        gfxContext.ClearColor(m_VisibilityBuffer); // Default to 0xFFFFFFFF (Sky/Empty)
+        gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
+        gfxContext.ClearDepth(g_SceneDepthBuffer);
+
         gfxContext.SetDynamicConstantBufferView(Renderer::kMaterialConstants, sizeof(psConstants), &psConstants);
 
         {
             ScopedTimer _prof2(L"Opaque", gfxContext);
-            {
-                gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE, true);
-                gfxContext.ClearDepth(g_SceneDepthBuffer);
-                gfxContext.SetPipelineState(m_DepthPSO);
-                gfxContext.SetDepthStencilTarget(g_SceneDepthBuffer.GetDSV());
-                gfxContext.SetViewportAndScissor(viewport, scissor);
-            }
-            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kOpaque );
+
+            // Bind the Visibility Buffer alongside the Depth Stencil
+            D3D12_CPU_DESCRIPTOR_HANDLE rtvs[] = { m_VisibilityBuffer.GetRTV() };
+            gfxContext.SetRenderTargets(1, rtvs, g_SceneDepthBuffer.GetDSV());
+
+            gfxContext.SetPipelineState(m_DepthPSO);
+            gfxContext.SetViewportAndScissor(viewport, scissor);
+
+            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kOpaque);
         }
 
         {
             ScopedTimer _prof2(L"Cutout", gfxContext);
-            {
-                gfxContext.SetPipelineState(m_CutoutDepthPSO);
-            }
-            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kCutout );
+            gfxContext.SetPipelineState(m_CutoutDepthPSO);
+            RenderObjects(gfxContext, camera.GetViewProjMatrix(), camera.GetPosition(), kCutout);
         }
     }
 
@@ -403,6 +430,6 @@ void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, cons
 
     {
         ScopedTimer _prof2(L"Render GATE Visualization", gfxContext);
-        m_Gate.RenderVisualization(gfxContext, camera, g_SceneDepthBuffer, viewport, scissor);
+        m_Gate.RenderVisualization(gfxContext, camera, g_SceneDepthBuffer, viewport, scissor, m_VisibilityBuffer);
     }
 }

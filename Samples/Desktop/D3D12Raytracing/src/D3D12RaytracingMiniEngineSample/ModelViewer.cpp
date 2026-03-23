@@ -1416,8 +1416,8 @@ void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
     ImGui::Spacing();
     ImGui::Text("GATE Visualization");
 
-    float texWidth = (float)Sponza::m_Gate.GetGateColorBuffer().GetWidth();
-    float texHeight = (float)Sponza::m_Gate.GetGateColorBuffer().GetHeight();
+    float texWidth = (float)Sponza::m_Gate.GetVisColorBuffer().GetWidth();
+    float texHeight = (float)Sponza::m_Gate.GetVisColorBuffer().GetHeight();
     float windowWidth = ImGui::GetContentRegionAvail().x;
     float scale = windowWidth / texWidth;
     ImVec2 imageSize = ImVec2(texWidth * scale, texHeight * scale);
@@ -1434,7 +1434,7 @@ void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
     destGpuHandle.ptr += descriptorSize * 1;
 
     // Ask the GPU to copy our ColorBuffer's CPU descriptor into the ImGui GPU heap
-    Graphics::g_Device->CopyDescriptorsSimple(1, destCpuHandle, Sponza::m_Gate.GetGateColorBuffer().GetSRV(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    Graphics::g_Device->CopyDescriptorsSimple(1, destCpuHandle, Sponza::m_Gate.GetVisColorBuffer().GetSRV(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     // Pass the GPU pointer to ImGui!
     ImTextureID texID = (ImTextureID)destGpuHandle.ptr;

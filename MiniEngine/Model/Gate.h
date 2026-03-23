@@ -20,11 +20,11 @@ namespace Sponza
         void Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
 
         // Dispatches the compute shaders to backprop and optimize
-        void Train(ComputeContext& trainCtx);
+        void Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer);
 
         // Renders the forward pass (inference) to a target buffer
         void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
-            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor);
+            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer);
 
         // Draws the ImGui interface
         void RenderGUI();
@@ -36,6 +36,7 @@ namespace Sponza
         void Cleanup();
 
 		inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
+		inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
 
     private:
         struct GlobalTriangle
@@ -103,5 +104,10 @@ namespace Sponza
 
 		// Custom parameters for debugging and experimentation
 		int m_CustomInt0 = 0;
+
+
+        ColorBuffer m_VisColorBuffer;
+        ComputePSO m_VisPSO;
+        RootSignature m_VisRootSig;
     };
 }

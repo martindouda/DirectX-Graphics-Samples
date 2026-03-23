@@ -63,6 +63,8 @@ cbuffer RootConstantsCB : register(b0)
     float adamBeta2;
     uint VertexStride;
     uint uvOffset;
+    uint screenWidth;
+    uint screenHeight;
     int customInt0;
 };
 
@@ -83,6 +85,7 @@ StructuredBuffer<GlobalTriangle> TriangleBuffer : register(t0);
 ByteAddressBuffer VertexUVBuffer : register(t1);
 Texture2D<float4> BindlessTextures[] : register(t0, space1);
 SamplerState LinearSampler : register(s0);
+Texture2D<uint> VisibilityBuffer : register(t2, space0);
 
 // GATE Features (Per-Vertex)
 RWStructuredBuffer<GateFeature> GateFeatureBuffer : register(u0);

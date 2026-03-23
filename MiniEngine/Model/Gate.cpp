@@ -8,6 +8,7 @@
 #include "CompiledShaders/GateBackpropCS.h"
 #include "CompiledShaders/GateOptimizeFeaturesCS.h"
 #include "CompiledShaders/GateOptimizeMLPCS.h"
+#include "CompiledShaders/VisBufferCS.h"
 
 using namespace Math;
 using namespace Graphics;
@@ -58,18 +59,24 @@ namespace Sponza
         m_GatePSO.Finalize();
 
         // 2. Setup Training Root Sig & PSOs
-        m_GateTrainRootSig.Reset(10, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 10);
-        m_GateTrainRootSig[1].InitAsBufferSRV(0);
-        m_GateTrainRootSig[2].InitAsBufferSRV(1);
+        m_GateTrainRootSig.Reset(11, 1);
+        m_GateTrainRootSig[0].InitAsConstants(0, 11); // register(b0)
+        m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
+        m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
+        // NEW SLOT: Visibility Buffer (register t2, space0)
         m_GateTrainRootSig[3].InitAsDescriptorTable(1);
-        m_GateTrainRootSig[3].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
-        m_GateTrainRootSig[4].InitAsBufferUAV(0);
-        m_GateTrainRootSig[5].InitAsBufferUAV(1);
-        m_GateTrainRootSig[6].InitAsBufferUAV(2);
-        m_GateTrainRootSig[7].InitAsBufferUAV(3);
-        m_GateTrainRootSig[8].InitAsBufferUAV(4);
-        m_GateTrainRootSig[9].InitAsBufferUAV(5);
+        m_GateTrainRootSig[3].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 1, 0);
+        // SHIFTED: Bindless Textures
+        m_GateTrainRootSig[4].InitAsDescriptorTable(1);
+        m_GateTrainRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
+        // SHIFTED: UAVs (5 through 10)
+        m_GateTrainRootSig[5].InitAsBufferUAV(0);
+        m_GateTrainRootSig[6].InitAsBufferUAV(1);
+        m_GateTrainRootSig[7].InitAsBufferUAV(2);
+        m_GateTrainRootSig[8].InitAsBufferUAV(3);
+        m_GateTrainRootSig[9].InitAsBufferUAV(4);
+        m_GateTrainRootSig[10].InitAsBufferUAV(5);
+
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
 
@@ -139,9 +146,26 @@ namespace Sponza
             }
         }
         m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
+
+
+
+        // 1. Create the UI-friendly texture (UNORM format)
+        // You can scale this down if you want a smaller ImGui window, but full size is fine
+        m_VisColorBuffer.Create(L"Visibility Vis Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R8G8B8A8_UNORM);
+
+        // 2. Setup the Root Signature
+        m_VisRootSig.Reset(2, 0);
+        m_VisRootSig[0].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, 1); // t0
+        m_VisRootSig[1].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 0, 1); // u0
+        m_VisRootSig.Finalize(L"Vis Buffer Root Sig");
+
+        // 3. Setup the PSO
+        m_VisPSO.SetRootSignature(m_VisRootSig);
+        m_VisPSO.SetComputeShader(g_pVisBufferCS, sizeof(g_pVisBufferCS));
+        m_VisPSO.Finalize();
     }
 
-    void Gate::Train(ComputeContext& trainCtx)
+    void Gate::Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer)
     {
         if (m_IsTrainingPaused)
             return;
@@ -162,23 +186,27 @@ namespace Sponza
             float adamBeta2;
             uint32_t VertexStride;
             uint32_t uvOffset;
+            uint32_t screenWidth;
+            uint32_t screenHeight;
             int CustomInt0;
         } cb = {
             m_TrainingStep, m_TotalTriangles, m_LearningRate, m_AdamEpsilon,
-			m_AdamBeta1, m_AdamBeta2, VertexStride, uvOffset, m_CustomInt0
+			m_AdamBeta1, m_AdamBeta2, VertexStride, uvOffset, 
+            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_CustomInt0
         };
-        trainCtx.SetConstantArray(0, 9, &cb);
+        trainCtx.SetConstantArray(0, 11, &cb);
 
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
-        trainCtx.SetDescriptorTable(3, m_Model->GetSRVs(0));
 
-        trainCtx.SetBufferUAV(4, m_GateFeatureBuffer);
-        trainCtx.SetBufferUAV(5, m_GateFeatureGradientBuffer);
-        trainCtx.SetBufferUAV(6, m_GateFeatureAdamBuffer);
-        trainCtx.SetBufferUAV(7, m_GateMLPBuffer);
-        trainCtx.SetBufferUAV(8, m_GateMLPGradientBuffer);
-        trainCtx.SetBufferUAV(9, m_GateMLPAdamBuffer);
+        trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
+        trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));
+        trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
+        trainCtx.SetBufferUAV(6, m_GateFeatureGradientBuffer);
+        trainCtx.SetBufferUAV(7, m_GateFeatureAdamBuffer);
+        trainCtx.SetBufferUAV(8, m_GateMLPBuffer);
+        trainCtx.SetBufferUAV(9, m_GateMLPGradientBuffer);
+        trainCtx.SetBufferUAV(10, m_GateMLPAdamBuffer);
 
         trainCtx.SetPipelineState(m_GateBackpropPSO);
         trainCtx.Dispatch(m_BackpropDispatchedGroups, 1, 1);
@@ -199,8 +227,26 @@ namespace Sponza
     }
 
     void Gate::RenderVisualization(GraphicsContext& gfxContext, const Camera& camera, DepthBuffer& depthBuffer,
-        const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor)
+        const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer)
     {
+        ComputeContext& cptCtx = gfxContext.GetComputeContext();
+        cptCtx.SetRootSignature(m_VisRootSig);
+        cptCtx.SetPipelineState(m_VisPSO);
+
+        cptCtx.TransitionResource(visibilityBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        cptCtx.TransitionResource(m_VisColorBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+        cptCtx.SetDynamicDescriptor(0, 0, visibilityBuffer.GetSRV());
+        cptCtx.SetDynamicDescriptor(1, 0, m_VisColorBuffer.GetUAV());
+
+        uint32_t dispatchX = Math::DivideByMultiple(visibilityBuffer.GetWidth(), 8);
+        uint32_t dispatchY = Math::DivideByMultiple(visibilityBuffer.GetHeight(), 8);
+        cptCtx.Dispatch(dispatchX, dispatchY, 1);
+
+        cptCtx.TransitionResource(m_VisColorBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+
+
         gfxContext.TransitionResource(m_GateColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
         gfxContext.ClearColor(m_GateColorBuffer);
 
@@ -257,7 +303,6 @@ namespace Sponza
         ImGui::SliderFloat("Adam Epsilon", &m_AdamEpsilon, 1e-8f, 1e-4f, "%.8f", ImGuiSliderFlags_Logarithmic);
 
 		ImGui::SliderInt("Custom Int 0", &m_CustomInt0, 0, 100000);
-
         ImGui::End();
     }
 
