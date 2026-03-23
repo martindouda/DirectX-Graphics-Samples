@@ -16,3 +16,4 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     MLPAdamBuffer[index] = adam;
     MLPGradientBuffer[index] = 0; // Clear for next batch
 }
+

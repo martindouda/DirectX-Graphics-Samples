@@ -255,7 +255,8 @@ void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, cons
     Renderer::UpdateGlobalDescriptors();
 
     ComputeContext& trainCtx = ComputeContext::Begin(L"GATE Training");
-    m_Gate.Train(trainCtx);
+    if (renderGateToViewport)
+        m_Gate.Train(trainCtx);
     trainCtx.Finish();
 
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();

@@ -1067,6 +1067,14 @@ void D3D12RaytracingMiniEngineSample::Raytrace(class GraphicsContext& gfxContext
     case RTM_REFLECTIONS:
         RaytraceReflections(gfxContext, m_Camera, g_SceneColorBuffer, g_SceneDepthBuffer, g_SceneNormalBuffer);
         break;
+    case RTM_GATE:
+        // Transition both buffers to copy states
+        gfxContext.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_COPY_DEST);
+        gfxContext.TransitionResource(Sponza::m_Gate.GetGateColorBuffer(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+        // Execute a raw hardware copy from your GATE buffer to the main scene buffer
+        gfxContext.GetCommandList()->CopyResource(g_SceneColorBuffer.GetResource(), Sponza::m_Gate.GetGateColorBuffer().GetResource());
+        break;
     }
 
     // Clear the gfxContext's descriptor heap since ray tracing changes this underneath the sheets

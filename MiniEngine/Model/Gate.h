@@ -35,7 +35,7 @@ namespace Sponza
 
         void Cleanup();
 
-		inline const ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
+		inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
 
     private:
         struct GlobalTriangle
@@ -53,6 +53,8 @@ namespace Sponza
         {
             DirectX::XMFLOAT4 mean;
             DirectX::XMFLOAT4 variance;
+            uint32_t stepCount;
+            uint32_t pad[3];
         };
 
 		const ModelH3D* m_Model;
@@ -90,8 +92,6 @@ namespace Sponza
 
         // --- Hyperparameters & Training State ---
         uint32_t m_TrainingStep = 1;
-        float m_AdamBeta1T = 0.9f;
-        float m_AdamBeta2T = 0.999f;
 
         float m_LearningRate = 0.001f;
         float m_AdamEpsilon = 1e-8f;
@@ -100,5 +100,8 @@ namespace Sponza
 
         bool m_IsTrainingPaused = false;
 		int m_BackpropDispatchedGroups = 1024; // * 64 triangles per step
+
+		// Custom parameters for debugging and experimentation
+		int m_CustomInt0 = 0;
     };
 }

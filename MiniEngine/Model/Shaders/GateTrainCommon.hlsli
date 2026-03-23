@@ -29,6 +29,8 @@
 struct AdamData
 {
     float4 mean, variance;
+    uint stepCount;
+    uint3 pad;
 };
 
 struct GlobalTriangle
@@ -59,10 +61,9 @@ cbuffer RootConstantsCB : register(b0)
     float adamEpsilon;
     float adamBeta1;
     float adamBeta2;
-    float adamBeta1T; // Beta1^t
-    float adamBeta2T; // Beta2^t
     uint VertexStride;
     uint uvOffset;
+    int customInt0;
 };
 
 #ifdef GATE_INFERENCE
@@ -255,10 +256,21 @@ void backpropLayer(const float3 target, inout float4 activations[ACTIVATION_QUAR
 
 float4 ApplyAdam(float4 gradient, inout AdamData adamData)
 {
+    // 1. Advance the local training timeline
+    adamData.stepCount += 1;
+
+    // 2. Calculate local bias correction factors
+    float localBeta1T = pow(adamBeta1, (float) adamData.stepCount);
+    float localBeta2T = pow(adamBeta2, (float) adamData.stepCount);
+    
+    // 3. Standard Adam momentum updates
     adamData.mean = lerp(gradient, adamData.mean, adamBeta1);
     adamData.variance = lerp(gradient * gradient, adamData.variance, adamBeta2);
-    float4 correctedMean = adamData.mean / (1.0f - adamBeta1T);
-    float4 correctedVariance = adamData.variance / (1.0f - adamBeta2T);
+    
+    // 4. Apply local bias correction
+    float4 correctedMean = adamData.mean / (1.0f - localBeta1T);
+    float4 correctedVariance = adamData.variance / (1.0f - localBeta2T);
+    
     return -learningRate * (correctedMean * rsqrt(correctedVariance + adamEpsilon));
 }
 #endif // !GATE_INFERENCE

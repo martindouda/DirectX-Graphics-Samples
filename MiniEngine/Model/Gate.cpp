@@ -109,8 +109,8 @@ namespace Sponza
         m_GateMLPGradientBuffer.Create(L"MLP Gradients", numNetworkParameters, sizeof(float), nullptr);
 
         // Adam
-        std::vector<AdamData> initialFeatureAdam(m_TotalVertices * 2, { {0,0,0,0}, {0,0,0,0} });
-        std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0} });
+        std::vector<AdamData> initialFeatureAdam(m_TotalVertices * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
+        std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         m_GateFeatureAdamBuffer.Create(L"Feature Adam Buffer", m_TotalVertices * 2, sizeof(AdamData), initialFeatureAdam.data());
         m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
 
@@ -160,15 +160,14 @@ namespace Sponza
             float adamEpsilon;
             float adamBeta1;
             float adamBeta2;
-            float adamBeta1T;
-            float adamBeta2T;
             uint32_t VertexStride;
             uint32_t uvOffset;
+            int CustomInt0;
         } cb = {
             m_TrainingStep, m_TotalTriangles, m_LearningRate, m_AdamEpsilon,
-            m_AdamBeta1, m_AdamBeta2, m_AdamBeta1T, m_AdamBeta2T, VertexStride, uvOffset
+			m_AdamBeta1, m_AdamBeta2, VertexStride, uvOffset, m_CustomInt0
         };
-        trainCtx.SetConstantArray(0, 10, &cb);
+        trainCtx.SetConstantArray(0, 9, &cb);
 
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
@@ -197,8 +196,6 @@ namespace Sponza
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
         m_TrainingStep++;
-        m_AdamBeta1T *= m_AdamBeta1;
-        m_AdamBeta2T *= m_AdamBeta2;
     }
 
     void Gate::RenderVisualization(GraphicsContext& gfxContext, const Camera& camera, DepthBuffer& depthBuffer,
@@ -259,6 +256,8 @@ namespace Sponza
         ImGui::SliderFloat("Adam Beta 2", &m_AdamBeta2, 0.9f, 0.9999f, "%.5f");
         ImGui::SliderFloat("Adam Epsilon", &m_AdamEpsilon, 1e-8f, 1e-4f, "%.8f", ImGuiSliderFlags_Logarithmic);
 
+		ImGui::SliderInt("Custom Int 0", &m_CustomInt0, 0, 100000);
+
         ImGui::End();
     }
 
@@ -266,11 +265,9 @@ namespace Sponza
     {
         // 1. Reset Training State
         m_TrainingStep = 1;
-        m_AdamBeta1T = m_AdamBeta1;
-        m_AdamBeta2T = m_AdamBeta2;
 
-        uint32_t VertexStride = m_Model->GetVertexStride();
-        uint32_t totalVertices = m_Model->GetVertexBuffer().SizeInBytes / VertexStride;
+        uint32_t vertexStride = m_Model->GetVertexStride();
+        uint32_t totalVertices = m_Model->GetVertexBuffer().SizeInBytes / vertexStride;
 
         // 2. Re-randomize Features
         std::vector<GateFeature> initialFeatures(totalVertices);
@@ -291,8 +288,9 @@ namespace Sponza
         m_GateMLPBuffer.Create(L"MLP Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
 
         // 4. Zero out Adam and Gradient Buffers
-        std::vector<AdamData> initialFeatureAdam(totalVertices * 2, { {0,0,0,0}, {0,0,0,0} });
-        std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0} });
+        // Initialize mean, variance, stepCount, and padding to 0
+        std::vector<AdamData> initialFeatureAdam(m_TotalVertices * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
+        std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
 
         m_GateFeatureAdamBuffer.Create(L"Feature Adam Buffer", totalVertices * 2, sizeof(AdamData), initialFeatureAdam.data());
         m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
