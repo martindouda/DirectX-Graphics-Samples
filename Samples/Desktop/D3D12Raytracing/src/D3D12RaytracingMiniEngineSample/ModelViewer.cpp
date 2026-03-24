@@ -940,6 +940,11 @@ void D3D12RaytracingMiniEngineSample::Update(float deltaT)
 {
     ScopedTimer _prof(L"Update State");
 
+    if (GameInput::IsFirstPressed(GameInput::kKey_space))
+        Sponza::m_Gate.SetIsTrainingPaused(!Sponza::m_Gate.GetIsTrainingPaused());
+    if (GameInput::IsFirstPressed(GameInput::kKey_r))
+        Sponza::m_Gate.ResetTraining();
+
     if (GameInput::IsFirstPressed(GameInput::kLShoulder))
         DebugZoom.Decrement();
     else if (GameInput::IsFirstPressed(GameInput::kRShoulder))

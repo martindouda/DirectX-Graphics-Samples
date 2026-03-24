@@ -37,6 +37,8 @@ namespace Sponza
 
 		inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
 		inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
+        inline void SetIsTrainingPaused(bool isTrainingPaused) { m_IsTrainingPaused = isTrainingPaused; }
+        inline bool GetIsTrainingPaused() { return m_IsTrainingPaused; }
 
     private:
         struct GlobalTriangle
