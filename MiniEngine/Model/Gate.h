@@ -103,7 +103,9 @@ namespace Sponza
         float m_AdamBeta2 = 0.999f;
         float m_WeightDecay = 0.01f;
 
-        bool m_IsTrainingPaused = false;
+        float m_ScreenSpaceRatio = 0.85f;
+
+        bool m_IsTrainingPaused = true;
 		int m_BackpropDispatchedGroups = 8192; // * 64 triangles per step
 
 		// Custom parameters for debugging and experimentation

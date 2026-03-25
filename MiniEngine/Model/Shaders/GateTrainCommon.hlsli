@@ -63,6 +63,7 @@ cbuffer RootConstantsCB : register(b0)
     float adamBeta1;
     float adamBeta2;
     float weightDecay;
+    float screenSpaceRatio;
     uint VertexStride;
     uint uvOffset;
     uint screenWidth;

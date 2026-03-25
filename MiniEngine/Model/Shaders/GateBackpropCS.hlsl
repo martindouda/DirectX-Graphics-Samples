@@ -18,47 +18,50 @@ void main(uint3 DTid : SV_DispatchThreadID)
     uint lowestStepCount = 0xFFFFFFFF; // Start with max value
     bool foundValidCandidate = false;
 
-    for (int i = 0; i < 16; ++i)
+    float strategyRoll = rand(rng); 
+
+    if (strategyRoll < screenSpaceRatio) 
     {
-        // Throw a random dart at the screen
-        uint2 pixelCoord = uint2(
-            (uint)(rand(rng) * screenWidth), 
-            (uint)(rand(rng) * screenHeight)
-        );
-
-        // Look up the Triangle ID visible at this pixel
-        uint candidateTriID = VisibilityBuffer.Load(int3(pixelCoord, 0)).r;
-
-        // If it hit the skybox (often represented as 0xFFFFFFFF), skip it
-        if (candidateTriID >= totalTriangles)
-            continue;
-
-        // Fetch the global triangle to find its vertices
-        GlobalTriangle candidateTri = TriangleBuffer[candidateTriID];
-
-        // Read the Adam step counts for these 3 vertices (multiplying by 2 because 
-        // you have 2 float4s per vertex in your GateFeature struct)
-        uint step0 = GateFeatureAdamBuffer[candidateTri.i0 * 2].stepCount;
-        uint step1 = GateFeatureAdamBuffer[candidateTri.i1 * 2].stepCount;
-        uint step2 = GateFeatureAdamBuffer[candidateTri.i2 * 2].stepCount;
-
-        // Calculate how "trained" this triangle is
-        uint avgStep = (step0 + step1 + step2) / 3;
-
-        // If this is the most undertrained triangle we've seen so far, save it
-        if (avgStep < lowestStepCount)
+        for (int i = 0; i < 16; ++i)
         {
-            lowestStepCount = avgStep;
-            bestTriID = candidateTriID;
-            foundValidCandidate = true;
+            // Throw a random dart at the screen
+            uint2 pixelCoord = uint2(
+                (uint)(rand(rng) * screenWidth), 
+                (uint)(rand(rng) * screenHeight)
+            );
+
+            // Look up the Triangle ID visible at this pixel
+            uint candidateTriID = VisibilityBuffer.Load(int3(pixelCoord, 0)).r;
+
+            // If it hit the skybox (often represented as 0xFFFFFFFF), skip it
+            if (candidateTriID >= totalTriangles)
+                continue;
+
+            // Fetch the global triangle to find its vertices
+            GlobalTriangle candidateTri = TriangleBuffer[candidateTriID];
+
+            // Read the Adam step counts for these 3 vertices (multiplying by 2 because 
+            // you have 2 float4s per vertex in your GateFeature struct)
+            uint step0 = GateFeatureAdamBuffer[candidateTri.i0 * 2].stepCount;
+            uint step1 = GateFeatureAdamBuffer[candidateTri.i1 * 2].stepCount;
+            uint step2 = GateFeatureAdamBuffer[candidateTri.i2 * 2].stepCount;
+
+            // Calculate how "trained" this triangle is
+            uint avgStep = (step0 + step1 + step2) / 3;
+
+            // If this is the most undertrained triangle we've seen so far, save it
+            if (avgStep < lowestStepCount)
+            {
+                lowestStepCount = avgStep;
+                bestTriID = candidateTriID;
+                foundValidCandidate = true;
+            }
         }
     }
-
-    //foundValidCandidate = false;
-    // Fallback: If all 16 darts hit the skybox, just pick a random uniform triangle
-    if (!foundValidCandidate)
+    else 
+    {
         bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
-
+    }
     //uint bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
 
     // Now we have our absolute best candidate! Proceed as normal.

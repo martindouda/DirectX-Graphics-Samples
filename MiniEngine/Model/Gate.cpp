@@ -1,4 +1,7 @@
 #include <imgui/imgui.h>
+#include <vector>
+#include <unordered_map>
+#include <DirectXMath.h>
 
 #include "Gate.h"
 #include "Renderer.h"
@@ -15,6 +18,25 @@ using namespace Graphics;
 
 namespace Sponza
 {
+    // 1. Pomocná struktura pro celoèíselnou 3D pozici (pro hashování)
+    struct Int3
+    {
+        int32_t x, y, z;
+
+        bool operator==(const Int3& other) const {
+            return x == other.x && y == other.y && z == other.z;
+        }
+    };
+
+    // 2. Hashovací funkce pro unordered_map
+    struct Int3Hash
+    {
+        std::size_t operator()(const Int3& k) const {
+            // Jednoduchý prostorový hash (tzv. prime hashe)
+            return ((k.x * 73856093) ^ (k.y * 19349663) ^ (k.z * 83492791));
+        }
+    };
+
     Gate::Gate() :
         m_GatePSO(L"GATE: Forward PSO"), m_GateBackpropPSO(L"GATE: Backprop"), m_GateOptMLPPSO(L"GATE: Optimize MLP"),
 		m_GateOptFeatPSO(L"GATE: Optimize Features"), m_EncodeColorPSO(L"GATE: Encode UVs CS"), m_Model(nullptr)
@@ -60,7 +82,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(11, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 13); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 14); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
         // NEW SLOT: Visibility Buffer (register t2, space0)
@@ -111,6 +133,10 @@ namespace Sponza
         std::vector<float> initialWeights(numNetworkParameters);
         for (uint32_t i = 0; i < numNetworkParameters; ++i)
             initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
+
+        initialWeights[0] = 5.0f;
+        initialWeights[10] = 5.0f;
+        initialWeights[100] = 5.0f;
 
         m_GateMLPBuffer.Create(L"MLP Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
         m_GateMLPGradientBuffer.Create(L"MLP Gradients", numNetworkParameters, sizeof(float), nullptr);
@@ -186,6 +212,7 @@ namespace Sponza
             float adamBeta1;
             float adamBeta2;
             float weightDecay;
+            float screenSpaceRatio;
             uint32_t VertexStride;
             uint32_t uvOffset;
             uint32_t screenWidth;
@@ -193,10 +220,10 @@ namespace Sponza
             int CustomInt0;
         } cb = {
             m_TrainingStep, m_TotalTriangles, m_FeatureLearningRate, m_MLPLearningRate, m_AdamEpsilon,
-			m_AdamBeta1, m_AdamBeta2, m_WeightDecay, VertexStride, uvOffset, 
+			m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset, 
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_CustomInt0
         };
-        trainCtx.SetConstantArray(0, 13, &cb);
+        trainCtx.SetConstantArray(0, 14, &cb);
 
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
@@ -299,11 +326,12 @@ namespace Sponza
 
         ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 8192, "%d groups");
         // Logarithmic slider is great for learning rates
-        ImGui::SliderFloat("Feature Learning Rate", &m_FeatureLearningRate, 0.0001f, 0.1f, "%.5f", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("MLP Learning Rate", &m_MLPLearningRate, 0.00001f, 0.01f, "%.6f", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("Adam Beta 1", &m_AdamBeta1, 0.8f, 0.999f, "%.4f");
-        ImGui::SliderFloat("Adam Beta 2", &m_AdamBeta2, 0.9f, 0.9999f, "%.5f");
-        ImGui::SliderFloat("Adam Epsilon", &m_AdamEpsilon, 1e-8f, 1e-4f, "%.8f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Feature Learning Rate", &m_FeatureLearningRate, 0.0001f, 0.1f, "%.5f");
+        ImGui::SliderFloat("MLP Learning Rate", &m_MLPLearningRate, 0.00001f, 0.01f, "%.6f");
+        ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");
+        //ImGui::SliderFloat("Adam Beta 1", &m_AdamBeta1, 0.8f, 0.999f, "%.4f");
+        //ImGui::SliderFloat("Adam Beta 2", &m_AdamBeta2, 0.9f, 0.9999f, "%.5f");
+        //ImGui::SliderFloat("Adam Epsilon", &m_AdamEpsilon, 1e-8f, 1e-4f, "%.8f", ImGuiSliderFlags_Logarithmic);
 
 		ImGui::SliderInt("Custom Int 0", &m_CustomInt0, 0, 100000);
         ImGui::End();
