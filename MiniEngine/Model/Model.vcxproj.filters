@@ -226,5 +226,8 @@
     <FxCompile Include="VisBufferCS.hlsl">
       <Filter>Gate</Filter>
     </FxCompile>
+    <FxCompile Include="Shaders\GateBroadcastCS.hlsl">
+      <Filter>Gate</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>

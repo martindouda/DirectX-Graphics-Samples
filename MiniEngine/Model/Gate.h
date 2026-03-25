@@ -1,3 +1,5 @@
+// Gate.h
+
 #pragma once
 
 #include "GraphicsCore.h"
@@ -10,6 +12,23 @@
 
 namespace Sponza
 {
+    struct Int3
+    {
+        int32_t x, y, z;
+
+        bool operator==(const Int3& other) const {
+            return x == other.x && y == other.y && z == other.z;
+        }
+    };
+
+    struct Int3Hash
+    {
+        std::size_t operator()(const Int3& k) const {
+            // Jednoduchý prostorový hash (tzv. prime hashe)
+            return ((k.x * 73856093) ^ (k.y * 19349663) ^ (k.z * 83492791));
+        }
+    };
+
     class Gate
     {
     public:
@@ -35,8 +54,8 @@ namespace Sponza
 
         void Cleanup();
 
-		inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
-		inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
+        inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
+        inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
         inline void SetIsTrainingPaused(bool isTrainingPaused) { m_IsTrainingPaused = isTrainingPaused; }
         inline bool GetIsTrainingPaused() { return m_IsTrainingPaused; }
 
@@ -60,11 +79,13 @@ namespace Sponza
             uint32_t pad[3];
         };
 
-		const ModelH3D* m_Model;
+        const ModelH3D* m_Model;
 
         // --- Network State & Buffers ---
         uint32_t m_TotalVertices = 0;
         uint32_t m_TotalTriangles = 0;
+
+        uint32_t m_UniqueSpatialVertexCount = 0;
 
         StructuredBuffer m_GateFeatureBuffer;
         ByteAddressBuffer m_GateFeatureGradientBuffer;
@@ -77,6 +98,12 @@ namespace Sponza
         StructuredBuffer m_GlobalTriangleBuffer;
         StructuredBuffer m_VertexMaterialMap;
 
+        StructuredBuffer m_SpatialTriangleBuffer;
+
+        // PØIDÁNO: MESH COLORS BUFFERY
+        StructuredBuffer m_UniqueFeatureBuffer;
+        StructuredBuffer m_VertexMappingBuffer;
+
         // --- PSOs and Root Signatures ---
         // Inference
         GraphicsPSO m_GatePSO;
@@ -88,6 +115,9 @@ namespace Sponza
         ComputePSO m_GateBackpropPSO;
         ComputePSO m_GateOptMLPPSO;
         ComputePSO m_GateOptFeatPSO;
+
+        // PØIDÁNO: BROADCAST PSO
+        ComputePSO m_GateBroadcastPSO;
 
         // Utils
         RootSignature m_EncodeColorRootSig;
@@ -106,10 +136,10 @@ namespace Sponza
         float m_ScreenSpaceRatio = 0.85f;
 
         bool m_IsTrainingPaused = true;
-		int m_BackpropDispatchedGroups = 8192; // * 64 triangles per step
+        int m_BackpropDispatchedGroups = 8192; // * 64 triangles per step
 
-		// Custom parameters for debugging and experimentation
-		int m_CustomInt0 = 0;
+        // Custom parameters for debugging and experimentation
+        int m_CustomInt0 = 0;
 
 
         ColorBuffer m_VisColorBuffer;

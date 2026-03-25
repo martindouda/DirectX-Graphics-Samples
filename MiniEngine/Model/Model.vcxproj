@@ -106,6 +106,7 @@
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.3</ShaderModel>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">6.3</ShaderModel>
     </FxCompile>
+    <FxCompile Include="Shaders\GateBroadcastCS.hlsl" />
     <FxCompile Include="Shaders\GateBackpropCS.hlsl" />
     <FxCompile Include="Shaders\GateOptimizeFeaturesCS.hlsl" />
     <FxCompile Include="Shaders\GateOptimizeMLPCS.hlsl" />
