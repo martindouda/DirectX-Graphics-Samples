@@ -12,7 +12,12 @@ void main(uint3 DTid : SV_DispatchThreadID) {
     float4 gradient = unpackFloat4(MLPGradientBuffer[index]);
     AdamData adam = MLPAdamBuffer[index];
     
-    MLPParameterBuffer[index] += ApplyAdam(gradient, adam, mlpLearningRate);
+    // 1. Fetch the current MLP weight
+    float4 currentWeight = MLPParameterBuffer[index];
+    
+    // 2. Pass it into ApplyAdam
+    MLPParameterBuffer[index] += ApplyAdam(gradient, currentWeight, adam, mlpLearningRate, weightDecay);
+
     MLPAdamBuffer[index] = adam;
     MLPGradientBuffer[index] = 0; // Clear for next batch
 }

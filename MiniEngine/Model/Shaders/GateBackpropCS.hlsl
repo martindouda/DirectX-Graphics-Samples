@@ -54,6 +54,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         }
     }
 
+    //foundValidCandidate = false;
     // Fallback: If all 16 darts hit the skybox, just pick a random uniform triangle
     if (!foundValidCandidate)
         bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);

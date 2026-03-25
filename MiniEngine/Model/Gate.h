@@ -101,9 +101,10 @@ namespace Sponza
         float m_AdamEpsilon = 1e-8f;
         float m_AdamBeta1 = 0.9f;
         float m_AdamBeta2 = 0.999f;
+        float m_WeightDecay = 0.01f;
 
         bool m_IsTrainingPaused = false;
-		int m_BackpropDispatchedGroups = 1024; // * 64 triangles per step
+		int m_BackpropDispatchedGroups = 8192; // * 64 triangles per step
 
 		// Custom parameters for debugging and experimentation
 		int m_CustomInt0 = 0;

@@ -60,7 +60,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(11, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 12); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 13); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
         // NEW SLOT: Visibility Buffer (register t2, space0)
@@ -185,6 +185,7 @@ namespace Sponza
             float adamEpsilon;
             float adamBeta1;
             float adamBeta2;
+            float weightDecay;
             uint32_t VertexStride;
             uint32_t uvOffset;
             uint32_t screenWidth;
@@ -192,10 +193,10 @@ namespace Sponza
             int CustomInt0;
         } cb = {
             m_TrainingStep, m_TotalTriangles, m_FeatureLearningRate, m_MLPLearningRate, m_AdamEpsilon,
-			m_AdamBeta1, m_AdamBeta2, VertexStride, uvOffset, 
+			m_AdamBeta1, m_AdamBeta2, m_WeightDecay, VertexStride, uvOffset, 
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_CustomInt0
         };
-        trainCtx.SetConstantArray(0, 12, &cb);
+        trainCtx.SetConstantArray(0, 13, &cb);
 
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);

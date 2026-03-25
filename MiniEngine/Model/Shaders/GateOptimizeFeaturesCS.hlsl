@@ -23,8 +23,11 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float4 gradient = unpackFloat4(packedGradient);
     AdamData adam = GateFeatureAdamBuffer[index];
     
-    // Read, add the Adam optimization step, and write directly back to the nested array
-    GateFeatureBuffer[vertexIndex].data[dataIndex] += ApplyAdam(gradient, adam, featureLearningRate);
+    // 1. Fetch the current feature vector
+    float4 currentFeature = GateFeatureBuffer[vertexIndex].data[dataIndex];
+    
+    // 2. Pass it into ApplyAdam
+    GateFeatureBuffer[vertexIndex].data[dataIndex] += ApplyAdam(gradient, currentFeature, adam, featureLearningRate, weightDecay);
     
     // Save updated Adam state and zero out the gradient for the next training batch
     GateFeatureAdamBuffer[index] = adam;

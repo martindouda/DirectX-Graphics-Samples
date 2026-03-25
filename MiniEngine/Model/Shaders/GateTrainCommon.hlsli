@@ -62,6 +62,7 @@ cbuffer RootConstantsCB : register(b0)
     float adamEpsilon;
     float adamBeta1;
     float adamBeta2;
+    float weightDecay;
     uint VertexStride;
     uint uvOffset;
     uint screenWidth;
@@ -258,24 +259,28 @@ void backpropLayer(const float3 target, inout float4 activations[ACTIVATION_QUAR
     }
 }
 
-float4 ApplyAdam(float4 gradient, inout AdamData adamData, float learningRate)
+// Update signature to include currentValue, lr, and wd
+float4 ApplyAdam(float4 gradient, float4 currentValue, inout AdamData adamData, float lr, float wd)
 {
-    // 1. Advance the local training timeline
     adamData.stepCount += 1;
 
-    // 2. Calculate local bias correction factors
-    float localBeta1T = pow(adamBeta1, (float) adamData.stepCount);
-    float localBeta2T = pow(adamBeta2, (float) adamData.stepCount);
-    
-    // 3. Standard Adam momentum updates
+    float localBeta1T = pow(adamBeta1, (float)adamData.stepCount);
+    float localBeta2T = pow(adamBeta2, (float)adamData.stepCount);
+
     adamData.mean = lerp(gradient, adamData.mean, adamBeta1);
     adamData.variance = lerp(gradient * gradient, adamData.variance, adamBeta2);
     
-    // 4. Apply local bias correction
     float4 correctedMean = adamData.mean / (1.0f - localBeta1T);
     float4 correctedVariance = adamData.variance / (1.0f - localBeta2T);
     
-    return -learningRate * (correctedMean * rsqrt(correctedVariance + adamEpsilon));
+    // 1. Standard Adam step
+    float4 adamStep = correctedMean * rsqrt(correctedVariance + adamEpsilon);
+    
+    // 2. Decoupled Weight Decay (AdamW)
+    float4 decayStep = currentValue * wd;
+
+    // 3. Apply learning rate to both
+    return -lr * (adamStep + decayStep);
 }
 #endif // !GATE_INFERENCE
 
