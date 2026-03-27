@@ -10,7 +10,7 @@ cbuffer VSConstants : register(b0)
 
 cbuffer MeshConstants : register(b1)
 {
-    uint baseVertex;
+    uint globalMeshOffset;
 };
 
 struct VSInput 
@@ -30,12 +30,8 @@ VSOutput main(VSInput input, uint vertexID : SV_VertexID)
     VSOutput output;
     output.position = mul(WVP, float4(input.position, 1.0f));
 
-    GateFeature feat = featureBuffer[vertexID + baseVertex];
+    GateFeature feat = FeatureBuffer[vertexID + globalMeshOffset];
 
-    //if (vertexID < 1000)
-    //    output.f0 = float4(1.0f, 1.0f, 1.0f, 1.0f);
-    //else
-    //    output.f0 = float4(0.0f, 0.0f, 1.0f, 1.0f);
     output.f0 = feat.data[0];
     output.f1 = feat.data[1];
 

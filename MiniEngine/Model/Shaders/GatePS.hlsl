@@ -10,29 +10,30 @@ struct VSOutput
     float4 f1 : TEXCOORD1;
 };
 
-// --- Architecture Macros (8 -> 16 -> 4) ---
+// --- Architecture (8 -> 16 -> 4) ---
 float4 main(VSOutput input) : SV_TARGET
 {
     float4 activationsA[MAX_NEURON_QUARTETS_PER_LAYER];
     float4 activationsB[MAX_NEURON_QUARTETS_PER_LAYER];
 
-    // 1. Load the interpolated features
+    // Load the interpolated features
     activationsA[0] = input.f0;
     activationsA[1] = input.f1;
-    activationsA[2] = 0.0f; // Padding for 16-neuron max size
+    // Padding for 16-neuron max size
+    activationsA[2] = 0.0f; 
     activationsA[3] = 0.0f;
 
-    // 2. LAYER 1 (8 Inputs -> 16 Hidden)
+    // LAYER 1 (8 Inputs -> 16 Hidden)
     // Current Quartets: 4 (16 neurons). Previous: 2 (8 inputs).
-    // Offset: 0. 
+    // Offset: 0.
     // This layer consumes 36 quartets total (32 for weights + 4 for biases).
     evalLayer(activationsA, activationsB, 0, 4, 2, HIDDEN_LAYER);
 
-    // 3. LAYER 2 (16 Hidden -> 4 Outputs)
+    // LAYER 2 (16 Hidden -> 4 Outputs)
     // Current Quartets: 1 (4 outputs). Previous: 4 (16 hidden).
     // Offset: Starts at 36.
     evalLayer(activationsB, activationsA, 36, 1, 4, OUTPUT_LAYER);
 
-    // 4. Return Output (Color is stored in the first quartet of the output array)
+    // Return output (Color is stored in the first quartet of the output array)
     return float4(activationsA[0].xyz, 1.0f);
 }

@@ -12,6 +12,7 @@
 
 namespace Sponza
 {
+    // --- Spatial hashing ---
     struct Int3
     {
         int32_t x, y, z;
@@ -24,7 +25,7 @@ namespace Sponza
     struct Int3Hash
     {
         std::size_t operator()(const Int3& k) const {
-            // Jednoduchý prostorový hash (tzv. prime hashe)
+            // Simple spatial hash
             return ((k.x * 73856093) ^ (k.y * 19349663) ^ (k.z * 83492791));
         }
     };
@@ -35,31 +36,28 @@ namespace Sponza
         Gate();
         ~Gate();
 
-        // Sets up all buffers, PSOs, and initial random weights
+        // --- Main API ---
         void Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
-
-        // Dispatches the compute shaders to backprop and optimize
         void Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer);
-
-        // Renders the forward pass (inference) to a target buffer
         void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
             const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer);
 
-        // Draws the ImGui interface
         void RenderGUI();
-
-        // Resets the neural network and Adam states back to step 1
         void ResetTraining();
-
-
         void Cleanup();
 
         inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
         inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
         inline void SetIsTrainingPaused(bool isTrainingPaused) { m_IsTrainingPaused = isTrainingPaused; }
-        inline bool GetIsTrainingPaused() { return m_IsTrainingPaused; }
+        inline bool GetIsTrainingPaused() const { return m_IsTrainingPaused; }
 
     private:
+        // --- Init helpers ---
+        void BuildSpatialIndex(const ModelH3D& model);
+        void AllocateBuffers(const ModelH3D& model);
+        void InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
+
+        // --- GPU data structures ---
         struct GlobalTriangle
         {
             uint32_t i0, i1, i2;
@@ -81,33 +79,33 @@ namespace Sponza
 
         const ModelH3D* m_Model;
 
-        // --- Network State & Buffers ---
+        // --- Geometry ---
         uint32_t m_TotalVertices = 0;
         uint32_t m_TotalTriangles = 0;
-
         uint32_t m_UniqueSpatialVertexCount = 0;
 
-        StructuredBuffer m_GateFeatureBuffer;
+        // Geometry buffers
+        StructuredBuffer m_GlobalTriangleBuffer;
+        StructuredBuffer m_SpatialTriangleBuffer;
+        StructuredBuffer m_VertexMaterialMap;
+
+        // Feature buffers (Cache-coherency architecture)
+        StructuredBuffer m_GateFeatureBuffer;           // Duplicated   (for fast read during Inference/Backprop)
+        StructuredBuffer m_UniqueFeatureBuffer;         // Unique       (for write by Adam optimizer)
+        StructuredBuffer m_VertexMappingBuffer;         // N:M mapping  (for copying data to duplicates)
+
         ByteAddressBuffer m_GateFeatureGradientBuffer;
         ByteAddressBuffer m_GateFeatureAdamBuffer;
 
+        // MLP buffers
         ByteAddressBuffer m_GateMLPBuffer;
         ByteAddressBuffer m_GateMLPGradientBuffer;
         ByteAddressBuffer m_GateMLPAdamBuffer;
 
-        StructuredBuffer m_GlobalTriangleBuffer;
-        StructuredBuffer m_VertexMaterialMap;
-
-        StructuredBuffer m_SpatialTriangleBuffer;
-
-        // PØIDÁNO: MESH COLORS BUFFERY
-        StructuredBuffer m_UniqueFeatureBuffer;
-        StructuredBuffer m_VertexMappingBuffer;
-
-        // --- PSOs and Root Signatures ---
+        // --- PSOs a Root Signatures ---
         // Inference
-        GraphicsPSO m_GatePSO;
         RootSignature m_GateRootSig;
+        GraphicsPSO m_GatePSO;
         ColorBuffer m_GateColorBuffer;
 
         // Training
@@ -115,35 +113,30 @@ namespace Sponza
         ComputePSO m_GateBackpropPSO;
         ComputePSO m_GateOptMLPPSO;
         ComputePSO m_GateOptFeatPSO;
-
-        // PØIDÁNO: BROADCAST PSO
         ComputePSO m_GateBroadcastPSO;
 
-        // Utils
+        // Vis
+        RootSignature m_VisRootSig;
+        ComputePSO m_VisPSO;
+        ColorBuffer m_VisColorBuffer;
+
         RootSignature m_EncodeColorRootSig;
         ComputePSO m_EncodeColorPSO;
 
-        // --- Hyperparameters & Training State ---
+		// --- Hyperparameters and state ---
         uint32_t m_TrainingStep = 1;
+        bool m_IsTrainingPaused = true;
 
+        int m_BackpropDispatchedGroups = 8192; // * 64 trojúhelníkù na krok
         float m_FeatureLearningRate = 0.05f;
         float m_MLPLearningRate = 0.002f;
         float m_AdamEpsilon = 1e-8f;
         float m_AdamBeta1 = 0.9f;
         float m_AdamBeta2 = 0.999f;
         float m_WeightDecay = 0.01f;
-
         float m_ScreenSpaceRatio = 0.85f;
 
-        bool m_IsTrainingPaused = true;
-        int m_BackpropDispatchedGroups = 8192; // * 64 triangles per step
-
-        // Custom parameters for debugging and experimentation
+        // Custom parametry pro experimenty (napø. Mesh Colors R faktor do budoucna)
         int m_CustomInt0 = 0;
-
-
-        ColorBuffer m_VisColorBuffer;
-        ComputePSO m_VisPSO;
-        RootSignature m_VisRootSig;
     };
 }

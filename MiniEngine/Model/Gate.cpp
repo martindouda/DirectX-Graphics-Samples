@@ -23,7 +23,7 @@ namespace Sponza
 {
     Gate::Gate() :
         m_GatePSO(L"GATE: Forward PSO"), m_GateBackpropPSO(L"GATE: Backprop"), m_GateOptMLPPSO(L"GATE: Optimize MLP"),
-		m_GateOptFeatPSO(L"GATE: Optimize Features"), m_EncodeColorPSO(L"GATE: Encode UVs CS"), m_Model(nullptr)
+        m_GateOptFeatPSO(L"GATE: Optimize Features"), m_EncodeColorPSO(L"GATE: Encode UVs CS"), m_Model(nullptr)
     {
     }
 
@@ -36,102 +36,30 @@ namespace Sponza
     {
         m_Model = &model;
         m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
-
-        // 1. Setup Inference PSO
-        m_GateRootSig.Reset(4, 0);
-        m_GateRootSig[0].InitAsConstantBuffer(0);
-        m_GateRootSig[1].InitAsBufferSRV(0);
-        m_GateRootSig[2].InitAsBufferSRV(1);
-        m_GateRootSig[3].InitAsConstants(1, 1);
-        m_GateRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-
-        D3D12_INPUT_ELEMENT_DESC vertElem[] = {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
-        };
-
-        m_GatePSO.SetRootSignature(m_GateRootSig);
-        m_GatePSO.SetRasterizerState(RasterizerDefault);
-        m_GatePSO.SetBlendState(BlendDisable);
-        m_GatePSO.SetDepthStencilState(DepthStateTestEqual);
-        m_GatePSO.SetInputLayout(_countof(vertElem), vertElem);
-        m_GatePSO.SetPrimitiveTopologyType(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE);
-        m_GatePSO.SetRenderTargetFormats(1, &colorFormat, depthFormat);
-        m_GatePSO.SetVertexShader(g_pGateVS, sizeof(g_pGateVS));
-        m_GatePSO.SetPixelShader(g_pGatePS, sizeof(g_pGatePS));
-        m_GatePSO.Finalize();
-
-        // 2. Setup Training Root Sig & PSOs
-        m_GateTrainRootSig.Reset(14, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 14); // register(b0)
-        m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
-        m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
-
-        m_GateTrainRootSig[3].InitAsDescriptorTable(1);
-        m_GateTrainRootSig[3].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 1, 0); // VisBuffer (t2)
-
-        m_GateTrainRootSig[4].InitAsDescriptorTable(1);
-        m_GateTrainRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1); // Bindless
-
-        m_GateTrainRootSig[5].InitAsBufferUAV(0); // u0
-        m_GateTrainRootSig[6].InitAsBufferUAV(1); // u1
-        m_GateTrainRootSig[7].InitAsBufferUAV(2); // u2
-        m_GateTrainRootSig[8].InitAsBufferUAV(3); // u3
-        m_GateTrainRootSig[9].InitAsBufferUAV(4); // u4
-        m_GateTrainRootSig[10].InitAsBufferUAV(5); // u5
-
-        // NOVÉ SLOTY PRO BROADCAST SHADER:
-        m_GateTrainRootSig[11].InitAsBufferSRV(3); // t3: VertexMappingBuffer
-        m_GateTrainRootSig[12].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
-        m_GateTrainRootSig[13].InitAsBufferSRV(5); // t5: SpatialTriangleBuffer
-
-        m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
-        m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
-
-        m_GateBackpropPSO.SetRootSignature(m_GateTrainRootSig);
-        m_GateBackpropPSO.SetComputeShader(g_pGateBackpropCS, sizeof(g_pGateBackpropCS));
-        m_GateBackpropPSO.Finalize();
-
-        m_GateOptMLPPSO.SetRootSignature(m_GateTrainRootSig);
-        m_GateOptMLPPSO.SetComputeShader(g_pGateOptimizeMLPCS, sizeof(g_pGateOptimizeMLPCS));
-        m_GateOptMLPPSO.Finalize();
-
-        m_GateOptFeatPSO.SetRootSignature(m_GateTrainRootSig);
-        m_GateOptFeatPSO.SetComputeShader(g_pGateOptimizeFeaturesCS, sizeof(g_pGateOptimizeFeaturesCS));
-        m_GateOptFeatPSO.Finalize();
-
-        // INICIALIZACE BROADCAST PSO:
-        m_GateBroadcastPSO.SetRootSignature(m_GateTrainRootSig);
-        m_GateBroadcastPSO.SetComputeShader(g_pGateBroadcastCS, sizeof(g_pGateBroadcastCS));
-        m_GateBroadcastPSO.Finalize();
-
-        // 1. Create the UI-friendly texture (UNORM format)
         m_VisColorBuffer.Create(L"Visibility Vis Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R8G8B8A8_UNORM);
 
-        // 2. Setup the Root Signature
-        m_VisRootSig.Reset(2, 0);
-        m_VisRootSig[0].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, 1); // t0
-        m_VisRootSig[1].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 0, 1); // u0
-        m_VisRootSig.Finalize(L"Vis Buffer Root Sig");
+        // 1. Data Processing
+        BuildSpatialIndex(model);
 
-        // 3. Setup the PSO
-        m_VisPSO.SetRootSignature(m_VisRootSig);
-        m_VisPSO.SetComputeShader(g_pVisBufferCS, sizeof(g_pVisBufferCS));
-        m_VisPSO.Finalize();
+        // 2. Memory Allocation
+        AllocateBuffers(model);
 
+        // 3. Pipeline Setup
+        InitializePSOs(colorFormat, depthFormat);
+    }
+
+    void Gate::BuildSpatialIndex(const ModelH3D& model)
+    {
         uint32_t vertexStride = model.GetVertexStride();
         m_TotalVertices = model.GetVertexBuffer().SizeInBytes / vertexStride;
 
-        // Kvantizace (Welding)
+        // Vertex welding
         const float QUANTIZATION_FACTOR = 10000.0f;
         std::unordered_map<Int3, uint32_t, Int3Hash> spatialHashMap;
         std::vector<uint32_t> originalToSpatialMap(m_TotalVertices);
-        m_UniqueSpatialVertexCount = 0; // POZOR: Zmìnìno na member promìnnou!
+        m_UniqueSpatialVertexCount = 0;
 
-        const unsigned char* rawVertexData = m_Model->GetVertexData();
+        const unsigned char* rawVertexData = model.GetVertexData();
         for (uint32_t i = 0; i < m_TotalVertices; ++i)
         {
             DirectX::XMFLOAT3* pos = (DirectX::XMFLOAT3*)(rawVertexData + (i * vertexStride));
@@ -180,7 +108,7 @@ namespace Sponza
         }
         m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
 
-        // Spatial Index Buffer
+        // Spatial index buffer
         std::vector<GlobalTriangle> spatialGlobalTris(m_TotalTriangles);
         for (uint32_t i = 0; i < m_TotalTriangles; ++i)
         {
@@ -193,11 +121,11 @@ namespace Sponza
             spatialGlobalTris[i] = newTri;
         }
         m_SpatialTriangleBuffer.Create(L"Spatial Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), spatialGlobalTris.data());
-
-        // Vytvoøení VertexMappingBufferu
         m_VertexMappingBuffer.Create(L"Vertex Mapping Buffer", m_TotalVertices, sizeof(uint32_t), originalToSpatialMap.data());
+    }
 
-
+    void Gate::AllocateBuffers(const ModelH3D& model)
+    {
         // A. Duplikovaný Feature Buffer
         std::vector<GateFeature> duplicatedFeatures(m_TotalVertices);
         for (uint32_t i = 0; i < m_TotalVertices; ++i)
@@ -208,7 +136,6 @@ namespace Sponza
         m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalVertices, sizeof(GateFeature), duplicatedFeatures.data());
 
         // B. Unikátní Feature Buffer a tréninkové buffery
-        // Initial features pro unikátní (mùže být stejné random)
         std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
         for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
         {
@@ -232,6 +159,88 @@ namespace Sponza
 
         std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
+    }
+
+    void Gate::InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
+    {
+        // 1. Setup Inference PSO
+        m_GateRootSig.Reset(4, 0);
+        m_GateRootSig[0].InitAsConstantBuffer(0);
+        m_GateRootSig[1].InitAsBufferSRV(0);
+        m_GateRootSig[2].InitAsBufferSRV(1);
+        m_GateRootSig[3].InitAsConstants(1, 1);
+        m_GateRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+        D3D12_INPUT_ELEMENT_DESC vertElem[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+        };
+
+        m_GatePSO.SetRootSignature(m_GateRootSig);
+        m_GatePSO.SetRasterizerState(RasterizerDefault);
+        m_GatePSO.SetBlendState(BlendDisable);
+        m_GatePSO.SetDepthStencilState(DepthStateTestEqual);
+        m_GatePSO.SetInputLayout(_countof(vertElem), vertElem);
+        m_GatePSO.SetPrimitiveTopologyType(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE);
+        m_GatePSO.SetRenderTargetFormats(1, &colorFormat, depthFormat);
+        m_GatePSO.SetVertexShader(g_pGateVS, sizeof(g_pGateVS));
+        m_GatePSO.SetPixelShader(g_pGatePS, sizeof(g_pGatePS));
+        m_GatePSO.Finalize();
+
+        // 2. Setup Training Root Sig & PSOs
+        m_GateTrainRootSig.Reset(14, 1);
+        m_GateTrainRootSig[0].InitAsConstants(0, 14); // register(b0)
+        m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
+        m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
+
+        m_GateTrainRootSig[3].InitAsDescriptorTable(1);
+        m_GateTrainRootSig[3].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 1, 0); // VisBuffer (t2)
+
+        m_GateTrainRootSig[4].InitAsDescriptorTable(1);
+        m_GateTrainRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1); // Bindless
+
+        m_GateTrainRootSig[5].InitAsBufferUAV(0); // u0
+        m_GateTrainRootSig[6].InitAsBufferUAV(1); // u1
+        m_GateTrainRootSig[7].InitAsBufferUAV(2); // u2
+        m_GateTrainRootSig[8].InitAsBufferUAV(3); // u3
+        m_GateTrainRootSig[9].InitAsBufferUAV(4); // u4
+        m_GateTrainRootSig[10].InitAsBufferUAV(5); // u5
+
+        m_GateTrainRootSig[11].InitAsBufferSRV(3); // t3: VertexMappingBuffer
+        m_GateTrainRootSig[12].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
+        m_GateTrainRootSig[13].InitAsBufferSRV(5); // t5: SpatialTriangleBuffer
+
+        m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
+        m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
+
+        m_GateBackpropPSO.SetRootSignature(m_GateTrainRootSig);
+        m_GateBackpropPSO.SetComputeShader(g_pGateBackpropCS, sizeof(g_pGateBackpropCS));
+        m_GateBackpropPSO.Finalize();
+
+        m_GateOptMLPPSO.SetRootSignature(m_GateTrainRootSig);
+        m_GateOptMLPPSO.SetComputeShader(g_pGateOptimizeMLPCS, sizeof(g_pGateOptimizeMLPCS));
+        m_GateOptMLPPSO.Finalize();
+
+        m_GateOptFeatPSO.SetRootSignature(m_GateTrainRootSig);
+        m_GateOptFeatPSO.SetComputeShader(g_pGateOptimizeFeaturesCS, sizeof(g_pGateOptimizeFeaturesCS));
+        m_GateOptFeatPSO.Finalize();
+
+        m_GateBroadcastPSO.SetRootSignature(m_GateTrainRootSig);
+        m_GateBroadcastPSO.SetComputeShader(g_pGateBroadcastCS, sizeof(g_pGateBroadcastCS));
+        m_GateBroadcastPSO.Finalize();
+
+        // 3. Setup Vis Buffer Root Sig
+        m_VisRootSig.Reset(2, 0);
+        m_VisRootSig[0].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, 1); // t0
+        m_VisRootSig[1].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 0, 1); // u0
+        m_VisRootSig.Finalize(L"Vis Buffer Root Sig");
+
+        m_VisPSO.SetRootSignature(m_VisRootSig);
+        m_VisPSO.SetComputeShader(g_pVisBufferCS, sizeof(g_pVisBufferCS));
+        m_VisPSO.Finalize();
     }
 
     void Gate::Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer)
@@ -269,17 +278,13 @@ namespace Sponza
         trainCtx.SetConstantArray(0, 14, &cb);
 
         // --- BACKPROP SETUP ---
-        // Pùvodní geometrie (t0 = slot 1) a Vertex data (t1 = slot 2) pro ètení UVs
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
-
-        // Prostorová geometrie (t5 = slot 13) pro sí
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_SpatialTriangleBuffer.GetGpuVirtualAddress());
 
         trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
         trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));
 
-        // Zde dáváme m_UniqueFeatureBuffer na u0 (slot 5) pro optimalizaci a zápis gradientù
         trainCtx.SetBufferUAV(5, m_UniqueFeatureBuffer);
         trainCtx.SetBufferUAV(6, m_GateFeatureGradientBuffer);
         trainCtx.SetBufferUAV(7, m_GateFeatureAdamBuffer);
@@ -299,28 +304,20 @@ namespace Sponza
         trainCtx.SetPipelineState(m_GateOptMLPPSO);
         trainCtx.Dispatch(1, 1, 1);
 
-        // 3. Optimize Features (Bìží nad Unique Vertex Count!)
+        // 3. Optimize features
         trainCtx.SetPipelineState(m_GateOptFeatPSO);
         trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * 2, 64), 1, 1);
 
-        // Èekáme, až Adam dopíše do UniqueFeatureBufferu
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
 
-        // --- 4. BROADCAST KROK ---
+		// 4. Broadcast features to duplicates
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
-
-        // ZDE BYLA CHYBA: Musíš explicitnì nabindovat SRVs pro Broadcast shader!
-        // t3 = slot 11 (Mapping buffer)
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(11, m_VertexMappingBuffer.GetGpuVirtualAddress());
-        // t4 = slot 12 (Natrénované unikátní vlastnosti)
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
-
-        // UAV: Broadcast zapisuje do DuplicatedFeatureBuffer (u0 = slot 5)
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
 
         trainCtx.Dispatch(Math::DivideByMultiple(m_TotalVertices, 64), 1, 1);
 
-        // Pøechody pro renderování
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
@@ -345,8 +342,6 @@ namespace Sponza
         cptCtx.Dispatch(dispatchX, dispatchY, 1);
 
         cptCtx.TransitionResource(m_VisColorBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
-
 
         gfxContext.TransitionResource(m_GateColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
         gfxContext.ClearColor(m_GateColorBuffer);
@@ -397,36 +392,38 @@ namespace Sponza
         ImGui::Text("Hyperparameters");
 
         ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 8192, "%d groups");
-        // Logarithmic slider is great for learning rates
         ImGui::SliderFloat("Feature Learning Rate", &m_FeatureLearningRate, 0.0001f, 0.1f, "%.5f");
         ImGui::SliderFloat("MLP Learning Rate", &m_MLPLearningRate, 0.00001f, 0.01f, "%.6f");
         ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");
-        //ImGui::SliderFloat("Adam Beta 1", &m_AdamBeta1, 0.8f, 0.999f, "%.4f");
-        //ImGui::SliderFloat("Adam Beta 2", &m_AdamBeta2, 0.9f, 0.9999f, "%.5f");
-        //ImGui::SliderFloat("Adam Epsilon", &m_AdamEpsilon, 1e-8f, 1e-4f, "%.8f", ImGuiSliderFlags_Logarithmic);
 
-		ImGui::SliderInt("Custom Int 0", &m_CustomInt0, 0, 100000);
+        ImGui::SliderInt("Custom Int 0", &m_CustomInt0, 0, 100000);
         ImGui::End();
     }
 
     void Gate::ResetTraining()
     {
-        // 1. Reset Training State
         m_TrainingStep = 1;
 
-        uint32_t vertexStride = m_Model->GetVertexStride();
-        uint32_t totalVertices = m_Model->GetVertexBuffer().SizeInBytes / vertexStride;
-
-        // 2. Re-randomize Features
-        std::vector<GateFeature> initialFeatures(totalVertices);
-        for (uint32_t i = 0; i < totalVertices; ++i)
+        std::vector<GateFeature> duplicatedFeatures(m_TotalVertices);
+        for (uint32_t i = 0; i < m_TotalVertices; ++i)
         {
-            initialFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-            initialFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+            duplicatedFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+            duplicatedFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_GateFeatureBuffer.Create(L"GATE Feature Buffer", totalVertices, sizeof(GateFeature), initialFeatures.data());
+        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalVertices, sizeof(GateFeature), duplicatedFeatures.data());
 
-        // 3. Re-randomize MLP Parameters
+        std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
+        for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
+        {
+            uniqueFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+            uniqueFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+        }
+        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_UniqueSpatialVertexCount, sizeof(GateFeature), uniqueFeatures.data());
+
+        std::vector<AdamData> initialFeatureAdam(m_UniqueSpatialVertexCount * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
+        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_UniqueSpatialVertexCount * 2, sizeof(AdamData), initialFeatureAdam.data());
+        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_UniqueSpatialVertexCount * 8, sizeof(float), nullptr);
+
         uint32_t numNetworkParameters = 212;
         std::vector<float> initialWeights(numNetworkParameters);
         for (uint32_t i = 0; i < numNetworkParameters; ++i)
@@ -435,16 +432,9 @@ namespace Sponza
         }
         m_GateMLPBuffer.Create(L"MLP Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
 
-        // 4. Zero out Adam and Gradient Buffers
-        // Initialize mean, variance, stepCount, and padding to 0
-        std::vector<AdamData> initialFeatureAdam(m_TotalVertices * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-
-        m_GateFeatureAdamBuffer.Create(L"Feature Adam Buffer", totalVertices * 2, sizeof(AdamData), initialFeatureAdam.data());
         m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
 
-        // (Gradients are zeroed on creation anyway, but we recreate to be safe)
-        m_GateFeatureGradientBuffer.Create(L"GATE Feature Gradients", totalVertices * 8, sizeof(float), nullptr);
         m_GateMLPGradientBuffer.Create(L"MLP Gradients", numNetworkParameters, sizeof(float), nullptr);
     }
 
@@ -458,5 +448,9 @@ namespace Sponza
         m_GateMLPAdamBuffer.Destroy();
         m_GlobalTriangleBuffer.Destroy();
         m_VertexMaterialMap.Destroy();
+
+        m_SpatialTriangleBuffer.Destroy();
+        m_UniqueFeatureBuffer.Destroy();
+        m_VertexMappingBuffer.Destroy();
     }
 }

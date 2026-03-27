@@ -76,30 +76,35 @@ cbuffer RootConstantsCB : register(b0)
 //   INFERENCE RESOURCES
 // -------------------------------------------------------------------------
 
-StructuredBuffer<GateFeature> featureBuffer : register(t0);
-StructuredBuffer<float4> MLPParameterBuffer : register(t1);
+StructuredBuffer<GateFeature> FeatureBuffer      : register(t0);
+StructuredBuffer<float4>      MLPParameterBuffer : register(t1);
 
 #else
 // -------------------------------------------------------------------------
 //   TRAINING RESOURCES
 // -------------------------------------------------------------------------
 
-StructuredBuffer<GlobalTriangle> TriangleBuffer : register(t0);
-StructuredBuffer<GlobalTriangle> SpatialTriangleBuffer : register(t5);
-ByteAddressBuffer VertexUVBuffer : register(t1);
-Texture2D<float4> BindlessTextures[] : register(t0, space1);
-SamplerState LinearSampler : register(s0);
-Texture2D<uint> VisibilityBuffer : register(t2, space0);
+// --- SRVs (Read-Only) ---
+StructuredBuffer<GlobalTriangle> GlobalTriangleBuffer  : register(t0);
+ByteAddressBuffer                VertexUVBuffer        : register(t1);
+Texture2D<uint>                  VisibilityBuffer      : register(t2, space0);
+StructuredBuffer<uint>           VertexMappingBuffer   : register(t3); // TotalVertexID -> UniqueVertexID
+StructuredBuffer<GateFeature>    UniqueFeatureBuffer   : register(t4); // Unique features for Backprop
+StructuredBuffer<GlobalTriangle> SpatialTriangleBuffer : register(t5); // Welded triangles for Network
 
-// GATE Features (Per-Vertex)
-RWStructuredBuffer<GateFeature> GateFeatureBuffer : register(u0);
-RWStructuredBuffer<int4> GateFeatureGradientBuffer : register(u1);
-RWStructuredBuffer<AdamData> GateFeatureAdamBuffer : register(u2);
+SamplerState                     LinearSampler         : register(s0);
+Texture2D<float4>                BindlessTextures[]    : register(t0, space1);
 
-// MLP Parameters
-RWStructuredBuffer<float4> MLPParameterBuffer : register(u3);
-RWStructuredBuffer<int4> MLPGradientBuffer : register(u4);
-RWStructuredBuffer<AdamData> MLPAdamBuffer : register(u5);
+// --- UAVs (Read/Write) ---
+// Features
+RWStructuredBuffer<GateFeature>  DuplicatedFeatureBuffer : register(u0);
+RWStructuredBuffer<int4>         FeatureGradientBuffer   : register(u1);
+RWStructuredBuffer<AdamData>     FeatureAdamBuffer       : register(u2);
+
+// MLP
+RWStructuredBuffer<float4>       MLPParameterBuffer      : register(u3);
+RWStructuredBuffer<int4>         MLPGradientBuffer       : register(u4);
+RWStructuredBuffer<AdamData>     MLPAdamBuffer           : register(u5);
 #endif
 
 // =========================================================================
@@ -183,9 +188,9 @@ void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint grad
 
 void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK])
 {
-    GateFeature f0 = GateFeatureBuffer[gateData.indices.x];
-    GateFeature f1 = GateFeatureBuffer[gateData.indices.y];
-    GateFeature f2 = GateFeatureBuffer[gateData.indices.z];
+    GateFeature f0 = DuplicatedFeatureBuffer[gateData.indices.x];
+    GateFeature f1 = DuplicatedFeatureBuffer[gateData.indices.y];
+    GateFeature f2 = DuplicatedFeatureBuffer[gateData.indices.z];
 
     activations[activationIndex++] = gateData.barycentrics.x * f0.data[0] + gateData.barycentrics.y * f1.data[0] + gateData.barycentrics.z * f2.data[0];
     activations[activationIndex++] = gateData.barycentrics.x * f0.data[1] + gateData.barycentrics.y * f1.data[1] + gateData.barycentrics.z * f2.data[1];
@@ -196,14 +201,14 @@ void gateEncodingBackprop(const GateEncodingData gateData, inout float4 errors[A
     float4 inputGrad0 = errors[0];
     float4 inputGrad1 = errors[1];
 
-    accumulateGradient(GateFeatureGradientBuffer, gateData.indices.x * 2 + 0, inputGrad0 * gateData.barycentrics.x);
-    accumulateGradient(GateFeatureGradientBuffer, gateData.indices.x * 2 + 1, inputGrad1 * gateData.barycentrics.x);
+    accumulateGradient(FeatureGradientBuffer, gateData.indices.x * 2 + 0, inputGrad0 * gateData.barycentrics.x);
+    accumulateGradient(FeatureGradientBuffer, gateData.indices.x * 2 + 1, inputGrad1 * gateData.barycentrics.x);
 
-    accumulateGradient(GateFeatureGradientBuffer, gateData.indices.y * 2 + 0, inputGrad0 * gateData.barycentrics.y);
-    accumulateGradient(GateFeatureGradientBuffer, gateData.indices.y * 2 + 1, inputGrad1 * gateData.barycentrics.y);
+    accumulateGradient(FeatureGradientBuffer, gateData.indices.y * 2 + 0, inputGrad0 * gateData.barycentrics.y);
+    accumulateGradient(FeatureGradientBuffer, gateData.indices.y * 2 + 1, inputGrad1 * gateData.barycentrics.y);
 
-    accumulateGradient(GateFeatureGradientBuffer, gateData.indices.z * 2 + 0, inputGrad0 * gateData.barycentrics.z);
-    accumulateGradient(GateFeatureGradientBuffer, gateData.indices.z * 2 + 1, inputGrad1 * gateData.barycentrics.z);
+    accumulateGradient(FeatureGradientBuffer, gateData.indices.z * 2 + 0, inputGrad0 * gateData.barycentrics.z);
+    accumulateGradient(FeatureGradientBuffer, gateData.indices.z * 2 + 1, inputGrad1 * gateData.barycentrics.z);
 }
 
 void evalLayerActivations(inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], uint weightOffset, uint prevNeuronOffset, uint currNeuronOffset, uint currQuartets, uint prevQuartets, uint layerType)
