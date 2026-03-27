@@ -85,6 +85,7 @@ StructuredBuffer<float4> MLPParameterBuffer : register(t1);
 // -------------------------------------------------------------------------
 
 StructuredBuffer<GlobalTriangle> TriangleBuffer : register(t0);
+StructuredBuffer<GlobalTriangle> SpatialTriangleBuffer : register(t5);
 ByteAddressBuffer VertexUVBuffer : register(t1);
 Texture2D<float4> BindlessTextures[] : register(t0, space1);
 SamplerState LinearSampler : register(s0);

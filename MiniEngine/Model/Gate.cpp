@@ -65,7 +65,7 @@ namespace Sponza
         m_GatePSO.Finalize();
 
         // 2. Setup Training Root Sig & PSOs
-        m_GateTrainRootSig.Reset(13, 1); // Zvýšeno na 13!
+        m_GateTrainRootSig.Reset(14, 1);
         m_GateTrainRootSig[0].InitAsConstants(0, 14); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
@@ -86,6 +86,7 @@ namespace Sponza
         // NOVÉ SLOTY PRO BROADCAST SHADER:
         m_GateTrainRootSig[11].InitAsBufferSRV(3); // t3: VertexMappingBuffer
         m_GateTrainRootSig[12].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
+        m_GateTrainRootSig[13].InitAsBufferSRV(5); // t5: SpatialTriangleBuffer
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
@@ -267,14 +268,18 @@ namespace Sponza
         };
         trainCtx.SetConstantArray(0, 14, &cb);
 
-        // ZDE MUSÍ BÝT m_SpatialTriangleBuffer! Backprop sahá po unikátních indexech
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_SpatialTriangleBuffer.GetGpuVirtualAddress());
+        // --- BACKPROP SETUP ---
+        // Pùvodní geometrie (t0 = slot 1) a Vertex data (t1 = slot 2) pro ètení UVs
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
+
+        // Prostorová geometrie (t5 = slot 13) pro sí
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_SpatialTriangleBuffer.GetGpuVirtualAddress());
 
         trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
         trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));
 
-        // Zde dáváme m_UniqueFeatureBuffer (pro optimalizaci a zápis gradientù)
+        // Zde dáváme m_UniqueFeatureBuffer na u0 (slot 5) pro optimalizaci a zápis gradientù
         trainCtx.SetBufferUAV(5, m_UniqueFeatureBuffer);
         trainCtx.SetBufferUAV(6, m_GateFeatureGradientBuffer);
         trainCtx.SetBufferUAV(7, m_GateFeatureAdamBuffer);
@@ -298,13 +303,21 @@ namespace Sponza
         trainCtx.SetPipelineState(m_GateOptFeatPSO);
         trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * 2, 64), 1, 1);
 
+        // Èekáme, až Adam dopíše do UniqueFeatureBufferu
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
 
-        // 4. BROADCAST KROK
+        // --- 4. BROADCAST KROK ---
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
+
+        // ZDE BYLA CHYBA: Musíš explicitnì nabindovat SRVs pro Broadcast shader!
+        // t3 = slot 11 (Mapping buffer)
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(11, m_VertexMappingBuffer.GetGpuVirtualAddress());
+        // t4 = slot 12 (Natrénované unikátní vlastnosti)
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
-        trainCtx.SetBufferUAV(5, m_GateFeatureBuffer); // Do u0 teï jde DuplicatedFeatureBuffer
+
+        // UAV: Broadcast zapisuje do DuplicatedFeatureBuffer (u0 = slot 5)
+        trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
+
         trainCtx.Dispatch(Math::DivideByMultiple(m_TotalVertices, 64), 1, 1);
 
         // Pøechody pro renderování
