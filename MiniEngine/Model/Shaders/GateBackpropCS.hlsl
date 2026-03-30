@@ -66,7 +66,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     
     // For backprop and MLP we use spatial indices
     GlobalTriangle spatialTri = SpatialTriangleBuffer[bestTriID];
-    gateData.indices = uint3(spatialTri.i0, spatialTri.i1, spatialTri.i2);
+    gateData.triangleId = bestTriID;
 
     // For ground truth we use the original triangle to sample the texture, because that's where the UVs are
     GlobalTriangle origTri = GlobalTriangleBuffer[bestTriID];

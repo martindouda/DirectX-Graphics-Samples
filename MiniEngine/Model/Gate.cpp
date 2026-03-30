@@ -121,32 +121,126 @@ namespace Sponza
             spatialGlobalTris[i] = newTri;
         }
         m_SpatialTriangleBuffer.Create(L"Spatial Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), spatialGlobalTris.data());
-        m_VertexMappingBuffer.Create(L"Vertex Mapping Buffer", m_TotalVertices, sizeof(uint32_t), originalToSpatialMap.data());
+
+
+        // ====================================================================
+        // MESH COLORS N:M DATA STRUCTURE
+        // ====================================================================
+
+        uint32_t R = m_MeshColorR; // Using the value from Gate.h
+        uint32_t K = m_MeshColorK;
+
+        // 1. Find all Unique Edges
+        std::unordered_map<SpatialEdge, uint32_t, SpatialEdgeHasher> edgeToUniqueId;
+        uint32_t uniqueEdgeCount = 0;
+
+        for (uint32_t i = 0; i < m_TotalTriangles; ++i)
+        {
+            const GlobalTriangle& tri = spatialGlobalTris[i];
+
+            SpatialEdge edges[3] = {
+                SpatialEdge(tri.i0, tri.i1), // Edge 0
+                SpatialEdge(tri.i1, tri.i2), // Edge 1
+                SpatialEdge(tri.i2, tri.i0)  // Edge 2
+            };
+
+            for (int e = 0; e < 3; ++e) {
+                if (edgeToUniqueId.find(edges[e]) == edgeToUniqueId.end()) {
+                    edgeToUniqueId[edges[e]] = uniqueEdgeCount++;
+                }
+            }
+        }
+
+        // 2. Calculate Memory Layout for the UNIQUE buffer
+        uint32_t pointsPerEdge = (R > 1) ? (R - 1) : 0;
+        uint32_t pointsPerFace = (R > 2) ? ((R - 1) * (R - 2) / 2) : 0;
+
+        uint32_t vertexPointsOffset = 0;
+        uint32_t edgePointsOffset = m_UniqueSpatialVertexCount;
+        uint32_t facePointsOffset = edgePointsOffset + (uniqueEdgeCount * pointsPerEdge);
+
+        m_TotalUniqueMeshColorPoints = facePointsOffset + (m_TotalTriangles * pointsPerFace);
+        m_TotalDuplicatedMeshColorPoints = m_TotalTriangles * K;
+
+        // 3. Build the N:M Mapping Buffer
+        std::vector<uint32_t> meshColorMapping(m_TotalDuplicatedMeshColorPoints);
+
+        for (uint32_t t = 0; t < m_TotalTriangles; ++t)
+        {
+            const GlobalTriangle& tri = spatialGlobalTris[t];
+            uint32_t baseIdx = t * K;
+            uint32_t localIdx = 0;
+            uint32_t localFaceCounter = 0;
+
+            for (uint32_t i = 0; i <= R; ++i)
+            {
+                for (uint32_t j = 0; j <= R - i; ++j)
+                {
+                    uint32_t k = R - i - j;
+                    uint32_t mappedUniqueId = 0;
+
+                    // A. CORNERS
+                    if (i == R)      mappedUniqueId = tri.i0;
+                    else if (j == R) mappedUniqueId = tri.i1;
+                    else if (k == R) mappedUniqueId = tri.i2;
+
+                    // B. EDGES
+                    else if (i == 0)
+                    {
+                        uint32_t edgeId = edgeToUniqueId[SpatialEdge(tri.i1, tri.i2)];
+                        uint32_t edgeLocalIdx = (tri.i1 < tri.i2) ? (j - 1) : (k - 1);
+                        mappedUniqueId = edgePointsOffset + (edgeId * pointsPerEdge) + edgeLocalIdx;
+                    }
+                    else if (j == 0)
+                    {
+                        uint32_t edgeId = edgeToUniqueId[SpatialEdge(tri.i2, tri.i0)];
+                        uint32_t edgeLocalIdx = (tri.i2 < tri.i0) ? (k - 1) : (i - 1);
+                        mappedUniqueId = edgePointsOffset + (edgeId * pointsPerEdge) + edgeLocalIdx;
+                    }
+                    else if (k == 0)
+                    {
+                        uint32_t edgeId = edgeToUniqueId[SpatialEdge(tri.i0, tri.i1)];
+                        uint32_t edgeLocalIdx = (tri.i0 < tri.i1) ? (i - 1) : (j - 1);
+                        mappedUniqueId = edgePointsOffset + (edgeId * pointsPerEdge) + edgeLocalIdx;
+                    }
+
+                    // C. FACE INTERIORS
+                    else
+                    {
+                        mappedUniqueId = facePointsOffset + (t * pointsPerFace) + localFaceCounter;
+                        localFaceCounter++;
+                    }
+
+                    meshColorMapping[baseIdx + localIdx] = mappedUniqueId;
+                    localIdx++;
+                }
+            }
+        }
+
+        m_MeshColorMappingBuffer.Create(L"Mesh Color Mapping Buffer", m_TotalDuplicatedMeshColorPoints, sizeof(uint32_t), meshColorMapping.data());
     }
 
     void Gate::AllocateBuffers(const ModelH3D& model)
     {
-        // A. Duplikovaný Feature Buffer
-        std::vector<GateFeature> duplicatedFeatures(m_TotalVertices);
-        for (uint32_t i = 0; i < m_TotalVertices; ++i)
+        std::vector<GateFeature> duplicatedFeatures(m_TotalDuplicatedMeshColorPoints);
+        for (uint32_t i = 0; i < m_TotalDuplicatedMeshColorPoints; ++i)
         {
             duplicatedFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
             duplicatedFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalVertices, sizeof(GateFeature), duplicatedFeatures.data());
+        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalDuplicatedMeshColorPoints, sizeof(GateFeature), duplicatedFeatures.data());
 
-        // B. Unikátní Feature Buffer a tréninkové buffery
-        std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
-        for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
+        std::vector<GateFeature> uniqueFeatures(m_TotalUniqueMeshColorPoints);
+        for (uint32_t i = 0; i < m_TotalUniqueMeshColorPoints; ++i)
         {
             uniqueFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
             uniqueFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_UniqueSpatialVertexCount, sizeof(GateFeature), uniqueFeatures.data());
+        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_TotalUniqueMeshColorPoints, sizeof(GateFeature), uniqueFeatures.data());
 
-        std::vector<AdamData> initialFeatureAdam(m_UniqueSpatialVertexCount * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_UniqueSpatialVertexCount * 2, sizeof(AdamData), initialFeatureAdam.data());
-        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_UniqueSpatialVertexCount * 8, sizeof(float), nullptr);
+        std::vector<AdamData> initialFeatureAdam(m_TotalUniqueMeshColorPoints * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
+        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_TotalUniqueMeshColorPoints * 2, sizeof(AdamData), initialFeatureAdam.data());
+        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_TotalUniqueMeshColorPoints * 8, sizeof(float), nullptr);
 
         // MLP
         uint32_t numNetworkParameters = 212;
@@ -192,7 +286,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(14, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 14); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 18); // <-- UPDATED TO 18
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
 
@@ -209,7 +303,7 @@ namespace Sponza
         m_GateTrainRootSig[9].InitAsBufferUAV(4); // u4
         m_GateTrainRootSig[10].InitAsBufferUAV(5); // u5
 
-        m_GateTrainRootSig[11].InitAsBufferSRV(3); // t3: VertexMappingBuffer
+        m_GateTrainRootSig[11].InitAsBufferSRV(3); // t3: MeshColorMappingBuffer
         m_GateTrainRootSig[12].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
         m_GateTrainRootSig[13].InitAsBufferSRV(5); // t5: SpatialTriangleBuffer
 
@@ -269,13 +363,18 @@ namespace Sponza
             uint32_t uvOffset;
             uint32_t screenWidth;
             uint32_t screenHeight;
+            uint32_t meshColorR;
+            uint32_t meshColorK;
+            uint32_t totalUniqueMeshColorPoints;
+            uint32_t totalDuplicatedMeshColorPoints;
             int CustomInt0;
         } cb = {
             m_TrainingStep, m_TotalTriangles, m_FeatureLearningRate, m_MLPLearningRate, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
-            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_CustomInt0
+            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
+            m_MeshColorR, m_MeshColorK, m_TotalUniqueMeshColorPoints, m_TotalDuplicatedMeshColorPoints, m_CustomInt0
         };
-        trainCtx.SetConstantArray(0, 14, &cb);
+        trainCtx.SetConstantArray(0, 18, &cb); // <-- UPDATED TO 18
 
         // --- BACKPROP SETUP ---
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
@@ -306,17 +405,17 @@ namespace Sponza
 
         // 3. Optimize features
         trainCtx.SetPipelineState(m_GateOptFeatPSO);
-        trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * 2, 64), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalUniqueMeshColorPoints * 2, 64), 1, 1); // <-- UPDATED
 
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
 
-		// 4. Broadcast features to duplicates
+        // 4. Broadcast features to duplicates
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(11, m_VertexMappingBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(11, m_MeshColorMappingBuffer.GetGpuVirtualAddress()); // <-- MAPPING BUFFER
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
 
-        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalVertices, 64), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalDuplicatedMeshColorPoints, 64), 1, 1); // <-- UPDATED
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -404,25 +503,25 @@ namespace Sponza
     {
         m_TrainingStep = 1;
 
-        std::vector<GateFeature> duplicatedFeatures(m_TotalVertices);
-        for (uint32_t i = 0; i < m_TotalVertices; ++i)
+        std::vector<GateFeature> duplicatedFeatures(m_TotalDuplicatedMeshColorPoints);
+        for (uint32_t i = 0; i < m_TotalDuplicatedMeshColorPoints; ++i)
         {
             duplicatedFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
             duplicatedFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalVertices, sizeof(GateFeature), duplicatedFeatures.data());
+        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalDuplicatedMeshColorPoints, sizeof(GateFeature), duplicatedFeatures.data());
 
-        std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
-        for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
+        std::vector<GateFeature> uniqueFeatures(m_TotalUniqueMeshColorPoints);
+        for (uint32_t i = 0; i < m_TotalUniqueMeshColorPoints; ++i)
         {
             uniqueFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
             uniqueFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_UniqueSpatialVertexCount, sizeof(GateFeature), uniqueFeatures.data());
+        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_TotalUniqueMeshColorPoints, sizeof(GateFeature), uniqueFeatures.data());
 
-        std::vector<AdamData> initialFeatureAdam(m_UniqueSpatialVertexCount * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_UniqueSpatialVertexCount * 2, sizeof(AdamData), initialFeatureAdam.data());
-        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_UniqueSpatialVertexCount * 8, sizeof(float), nullptr);
+        std::vector<AdamData> initialFeatureAdam(m_TotalUniqueMeshColorPoints * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
+        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_TotalUniqueMeshColorPoints * 2, sizeof(AdamData), initialFeatureAdam.data());
+        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_TotalUniqueMeshColorPoints * 8, sizeof(float), nullptr);
 
         uint32_t numNetworkParameters = 212;
         std::vector<float> initialWeights(numNetworkParameters);
@@ -451,6 +550,6 @@ namespace Sponza
 
         m_SpatialTriangleBuffer.Destroy();
         m_UniqueFeatureBuffer.Destroy();
-        m_VertexMappingBuffer.Destroy();
+        m_MeshColorMappingBuffer.Destroy();
     }
 }

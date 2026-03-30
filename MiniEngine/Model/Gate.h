@@ -25,8 +25,29 @@ namespace Sponza
     struct Int3Hash
     {
         std::size_t operator()(const Int3& k) const {
-            // Simple spatial hash
             return ((k.x * 73856093) ^ (k.y * 19349663) ^ (k.z * 83492791));
+        }
+    };
+
+    // Ensures we always identify an edge the same way, regardless of triangle winding order
+    struct SpatialEdge
+    {
+        uint32_t vMin, vMax;
+
+        SpatialEdge(uint32_t a, uint32_t b) {
+            vMin = std::min(a, b);
+            vMax = std::max(a, b);
+        }
+
+        bool operator==(const SpatialEdge& other) const {
+            return vMin == other.vMin && vMax == other.vMax;
+        }
+    };
+
+    struct SpatialEdgeHasher
+    {
+        std::size_t operator()(const SpatialEdge& e) const {
+            return std::hash<uint32_t>()(e.vMin) ^ (std::hash<uint32_t>()(e.vMax) << 1);
         }
     };
 
@@ -84,6 +105,9 @@ namespace Sponza
         uint32_t m_TotalTriangles = 0;
         uint32_t m_UniqueSpatialVertexCount = 0;
 
+        uint32_t m_TotalUniqueMeshColorPoints = 0;
+        uint32_t m_TotalDuplicatedMeshColorPoints = 0;
+
         // Geometry buffers
         StructuredBuffer m_GlobalTriangleBuffer;
         StructuredBuffer m_SpatialTriangleBuffer;
@@ -92,7 +116,7 @@ namespace Sponza
         // Feature buffers (Cache-coherency architecture)
         StructuredBuffer m_GateFeatureBuffer;           // Duplicated   (for fast read during Inference/Backprop)
         StructuredBuffer m_UniqueFeatureBuffer;         // Unique       (for write by Adam optimizer)
-        StructuredBuffer m_VertexMappingBuffer;         // N:M mapping  (for copying data to duplicates)
+        StructuredBuffer m_MeshColorMappingBuffer;      // N:M mapping  (replaces m_VertexMappingBuffer)
 
         ByteAddressBuffer m_GateFeatureGradientBuffer;
         ByteAddressBuffer m_GateFeatureAdamBuffer;
@@ -102,7 +126,7 @@ namespace Sponza
         ByteAddressBuffer m_GateMLPGradientBuffer;
         ByteAddressBuffer m_GateMLPAdamBuffer;
 
-        // --- PSOs a Root Signatures ---
+        // --- PSOs and Root Signatures ---
         // Inference
         RootSignature m_GateRootSig;
         GraphicsPSO m_GatePSO;
@@ -123,11 +147,11 @@ namespace Sponza
         RootSignature m_EncodeColorRootSig;
         ComputePSO m_EncodeColorPSO;
 
-		// --- Hyperparameters and state ---
+        // --- Hyperparameters and state ---
         uint32_t m_TrainingStep = 1;
         bool m_IsTrainingPaused = true;
 
-        int m_BackpropDispatchedGroups = 8192; // * 64 trojúhelníkù na krok
+        int m_BackpropDispatchedGroups = 8192; // * 64 triangles per step
         float m_FeatureLearningRate = 0.05f;
         float m_MLPLearningRate = 0.002f;
         float m_AdamEpsilon = 1e-8f;
@@ -136,7 +160,11 @@ namespace Sponza
         float m_WeightDecay = 0.01f;
         float m_ScreenSpaceRatio = 0.85f;
 
-        // Custom parametry pro experimenty (napø. Mesh Colors R faktor do budoucna)
+        // Mesh Colors Configuration
+        uint32_t m_MeshColorR = 2; // Resolution (1 = vertices only, 2 = 1 point per edge, etc.)
+        uint32_t m_MeshColorK = 6; // Points per triangle (Calculated as: (R+1)*(R+2)/2)
+
+        // Custom parameters for experiments
         int m_CustomInt0 = 0;
     };
 }

@@ -5,17 +5,17 @@
 [numthreads(64, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-    uint totalVertexID = DTid.x;
+    uint duplicatedIndex = DTid.x;
 
-    if (totalVertexID >= totalTriangles * 3) // Nebo radìji pøedat totalVertices v cbufferu
+    if (duplicatedIndex >= totalDuplicatedMeshColorPoints) 
         return;
 
-    // 1. Zjistíme, do kterého unikátního bodu tento vertex fyzicky patøí
-    uint uniqueID = VertexMappingBuffer[totalVertexID];
+    // 1. N:M Mapping: Find the unique point ID
+    uint uniqueID = VertexMappingBuffer[duplicatedIndex]; // t3
 
-    // 2. Pøeèteme natrénovaný vektor z Unique bufferu
+    // 2. Read the newly optimized feature from Unique buffer
     GateFeature feature = UniqueFeatureBuffer[uniqueID];
 
-    // 3. Zapíšeme do finálního bufferu pro inferenci
-    DuplicatedFeatureBuffer[totalVertexID] = feature;
+    // 3. Broadcast it to the Duplicated buffer
+    DuplicatedFeatureBuffer[duplicatedIndex] = feature;
 }

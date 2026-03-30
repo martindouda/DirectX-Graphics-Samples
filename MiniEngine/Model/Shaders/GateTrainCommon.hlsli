@@ -46,7 +46,13 @@ struct GateFeature
 struct GateEncodingData
 {
     float3 barycentrics;
-    uint3 indices;
+    uint triangleId;
+};
+
+struct MeshColorSample
+{
+    uint3 indices; // Local 1D indices [0, K-1]
+    float3 weights; // Local barycentrics
 };
 
 // =========================================================================
@@ -68,7 +74,11 @@ cbuffer RootConstantsCB : register(b0)
     uint uvOffset;
     uint screenWidth;
     uint screenHeight;
-    int customInt0;
+    // New Mesh Color variables
+    uint meshColorR;
+    uint meshColorK;
+    uint totalUniqueMeshColorPoints;
+    uint totalDuplicatedMeshColorPoints;
 };
 
 #ifdef GATE_INFERENCE
@@ -170,10 +180,69 @@ float4 activationFunctionOutputDeriv(float4 v)
     return v * (1.0f - v);
 }
 
-#ifndef GATE_INFERENCE
+
+// =========================================================================
+//   Mesh Colors: Yuksel's 2D -> 1D Filter
+// =========================================================================
+
+// Converts integer sub-triangle coordinates (i, j) to a linear 1D index
+uint GetMeshColor1DIndex(uint i, uint j, uint R)
+{
+    return i * (R + 1) - (i * (i - 1)) / 2 + j;
+}
+
+MeshColorSample GetMeshColorSample(float3 barycentrics, uint R)
+{
+    // 1. Scale barycentrics by resolution
+    float u_prime = barycentrics.x * R;
+    float v_prime = barycentrics.y * R;
+
+    // 2. Find integer anchor of the sub-triangle
+    uint i = (uint) floor(u_prime);
+    uint j = (uint) floor(v_prime);
+
+    // Handle floating point inaccuracies exactly on the V0 or V1 corners
+    if (i >= R)
+    {
+        i = R;
+        j = 0;
+    }
+    if (j >= R)
+    {
+        i = 0;
+        j = R;
+    }
+
+    // 3. Find fractional offsets
+    float du = u_prime - (float) i;
+    float dv = v_prime - (float) j;
+
+    MeshColorSample sample;
+
+    // 4. Determine which half of the quad we are in
+    if (du + dv <= 1.0f)
+    {
+        sample.indices.x = GetMeshColor1DIndex(i + 1, j, R); // +u direction
+        sample.indices.y = GetMeshColor1DIndex(i, j + 1, R); // +v direction
+        sample.indices.z = GetMeshColor1DIndex(i, j, R); // Origin
+        sample.weights = float3(du, dv, 1.0f - du - dv);
+    }
+    else
+    {
+        sample.indices.x = GetMeshColor1DIndex(i + 1, j + 1, R); // Opposite corner
+        sample.indices.y = GetMeshColor1DIndex(i, j + 1, R); // +v direction
+        sample.indices.z = GetMeshColor1DIndex(i + 1, j, R); // +u direction
+        sample.weights = float3(du + dv - 1.0f, 1.0f - du, 1.0f - dv);
+    }
+
+    return sample;
+}
+
 // =========================================================================
 //   TRAINING ONLY FUNCTIONS
 // =========================================================================
+
+#ifndef GATE_INFERENCE
 
 void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint gradientIndex, float4 gradient)
 {
@@ -188,27 +257,42 @@ void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint grad
 
 void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK])
 {
-    GateFeature f0 = DuplicatedFeatureBuffer[gateData.indices.x];
-    GateFeature f1 = DuplicatedFeatureBuffer[gateData.indices.y];
-    GateFeature f2 = DuplicatedFeatureBuffer[gateData.indices.z];
+    // Find our 3 local points and weights
+    MeshColorSample mc = GetMeshColorSample(gateData.barycentrics, meshColorR);
 
-    activations[activationIndex++] = gateData.barycentrics.x * f0.data[0] + gateData.barycentrics.y * f1.data[0] + gateData.barycentrics.z * f2.data[0];
-    activations[activationIndex++] = gateData.barycentrics.x * f0.data[1] + gateData.barycentrics.y * f1.data[1] + gateData.barycentrics.z * f2.data[1];
+    // Calculate global offset for this specific triangle in the DUPLICATED buffer
+    uint baseIdx = gateData.triangleId * meshColorK;
+
+    // Fast, Cache-Coherent Read!
+    GateFeature f0 = DuplicatedFeatureBuffer[baseIdx + mc.indices.x];
+    GateFeature f1 = DuplicatedFeatureBuffer[baseIdx + mc.indices.y];
+    GateFeature f2 = DuplicatedFeatureBuffer[baseIdx + mc.indices.z];
+
+    activations[activationIndex++] = mc.weights.x * f0.data[0] + mc.weights.y * f1.data[0] + mc.weights.z * f2.data[0];
+    activations[activationIndex++] = mc.weights.x * f0.data[1] + mc.weights.y * f1.data[1] + mc.weights.z * f2.data[1];
 }
 
 void gateEncodingBackprop(const GateEncodingData gateData, inout float4 errors[ACTIVATION_QUARTETS_PER_NETWORK])
 {
+    MeshColorSample mc = GetMeshColorSample(gateData.barycentrics, meshColorR);
+    uint baseIdx = gateData.triangleId * meshColorK;
+
+    // Use the N:M Mapping Buffer to figure out where to accumulate gradients in the UNIQUE buffer!
+    uint unique0 = VertexMappingBuffer[baseIdx + mc.indices.x]; // Note: Keep using t3 register, just renamed in C++
+    uint unique1 = VertexMappingBuffer[baseIdx + mc.indices.y];
+    uint unique2 = VertexMappingBuffer[baseIdx + mc.indices.z];
+
     float4 inputGrad0 = errors[0];
     float4 inputGrad1 = errors[1];
 
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.x * 2 + 0, inputGrad0 * gateData.barycentrics.x);
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.x * 2 + 1, inputGrad1 * gateData.barycentrics.x);
+    accumulateGradient(FeatureGradientBuffer, unique0 * 2 + 0, inputGrad0 * mc.weights.x);
+    accumulateGradient(FeatureGradientBuffer, unique0 * 2 + 1, inputGrad1 * mc.weights.x);
 
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.y * 2 + 0, inputGrad0 * gateData.barycentrics.y);
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.y * 2 + 1, inputGrad1 * gateData.barycentrics.y);
+    accumulateGradient(FeatureGradientBuffer, unique1 * 2 + 0, inputGrad0 * mc.weights.y);
+    accumulateGradient(FeatureGradientBuffer, unique1 * 2 + 1, inputGrad1 * mc.weights.y);
 
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.z * 2 + 0, inputGrad0 * gateData.barycentrics.z);
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.z * 2 + 1, inputGrad1 * gateData.barycentrics.z);
+    accumulateGradient(FeatureGradientBuffer, unique2 * 2 + 0, inputGrad0 * mc.weights.z);
+    accumulateGradient(FeatureGradientBuffer, unique2 * 2 + 1, inputGrad1 * mc.weights.z);
 }
 
 void evalLayerActivations(inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], uint weightOffset, uint prevNeuronOffset, uint currNeuronOffset, uint currQuartets, uint prevQuartets, uint layerType)
