@@ -2,7 +2,7 @@
 
 #include "GateTrainCommon.hlsli"
 
-[numthreads(OPTIMIZATION_THREADGROUP_SIZE, 1, 1)]
+[numthreads(OPTIMIZATION_MLP_THREADGROUP_SIZE, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
     uint index = DTid.x;
 

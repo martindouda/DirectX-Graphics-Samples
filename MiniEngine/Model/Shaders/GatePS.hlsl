@@ -1,27 +1,40 @@
+// File: GatePS.hlsl
+
 #define GATE_INFERENCE
 #include "GateTrainCommon.hlsli"
 
-cbuffer MeshConstants : register(b1) { uint globalTriangleOffset; };
+cbuffer MeshConstants : register(b1) 
+{ 
+    uint globalTriangleOffset; 
+    uint meshColorResolution;
+    uint pointsPerTri;
+};
 
-struct VSOutput { float4 Position : SV_POSITION; };
+struct VSOutput 
+{
+    float4 Position : SV_POSITION; 
+};
 
 float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
 {
     uint globalTriID = primitiveID + globalTriangleOffset;
-    uint baseIndex = globalTriID * 6; // Každý trojúhelník má 6 vektorù
+    uint baseIndex = globalTriID * pointsPerTri;
 
-    float u = barycentrics.x * 2.0f; float v = barycentrics.y * 2.0f; float w = barycentrics.z * 2.0f;
-    uint i0, i1, i2; float weight0, weight1, weight2;
+    uint i0, j0, i1, j1, i2, j2;
+    float weight0, weight1, weight2;
+    
+    // Získáme lokální møížkové souøadnice
+    getMeshColorIndicesAndWeights(barycentrics, meshColorResolution, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
 
-    if (u >= 1.0f) { i0 = 0; i1 = 3; i2 = 5; weight0 = u - 1.0f; weight1 = v; weight2 = w; }
-    else if (v >= 1.0f) { i0 = 3; i1 = 1; i2 = 4; weight0 = u; weight1 = v - 1.0f; weight2 = w; }
-    else if (w >= 1.0f) { i0 = 5; i1 = 4; i2 = 2; weight0 = u; weight1 = v; weight2 = w - 1.0f; }
-    else { i0 = 3; i1 = 4; i2 = 5; weight0 = 1.0f - w; weight1 = 1.0f - u; weight2 = 1.0f - v; }
+    // Pøevedeme na 1D indexy
+    uint idx0 = get1DIndex(i0, j0, meshColorResolution);
+    uint idx1 = get1DIndex(i1, j1, meshColorResolution);
+    uint idx2 = get1DIndex(i2, j2, meshColorResolution);
 
     // Naèteme 3 správné vektory a nainterpolujeme je
-    GateFeature f0 = FeatureBuffer[baseIndex + i0];
-    GateFeature f1 = FeatureBuffer[baseIndex + i1];
-    GateFeature f2 = FeatureBuffer[baseIndex + i2];
+    GateFeature f0 = FeatureBuffer[baseIndex + idx0];
+    GateFeature f1 = FeatureBuffer[baseIndex + idx1];
+    GateFeature f2 = FeatureBuffer[baseIndex + idx2];
 
     float4 interpF0 = weight0 * f0.data[0] + weight1 * f1.data[0] + weight2 * f2.data[0];
     float4 interpF1 = weight0 * f0.data[1] + weight1 * f1.data[1] + weight2 * f2.data[1];

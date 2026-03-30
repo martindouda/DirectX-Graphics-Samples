@@ -30,13 +30,17 @@ void main(uint3 DTid : SV_DispatchThreadID)
             if (candidateTriID >= totalTriangles)
                 continue;
 
-            // NAHRAZENO MÍSTO SpatialTriangleBuffer:
-            uint baseIdx = candidateTriID * 6;
+            uint baseIdx = candidateTriID * pointsPerTri;
             
-            // Získáme unikátní ID našich 3 rohù trojúhelníku pøímo z N:M mapování
-            uint uniqueI0 = VertexMappingBuffer[baseIdx + 0]; // Roh U
-            uint uniqueI1 = VertexMappingBuffer[baseIdx + 1]; // Roh V
-            uint uniqueI2 = VertexMappingBuffer[baseIdx + 2]; // Roh W
+            // Získáme 1D indexy rohù v rámci møížky s rozlišením R
+            uint cornerU_1D = get1DIndex(meshColorResolution, 0, meshColorResolution);
+            uint cornerV_1D = get1DIndex(0, meshColorResolution, meshColorResolution);
+            uint cornerW_1D = get1DIndex(0, 0, meshColorResolution);
+
+            // Získáme unikátní ID našich 3 rohù trojúhelníku
+            uint uniqueI0 = VertexMappingBuffer[baseIdx + cornerU_1D]; 
+            uint uniqueI1 = VertexMappingBuffer[baseIdx + cornerV_1D]; 
+            uint uniqueI2 = VertexMappingBuffer[baseIdx + cornerW_1D]; 
 
             // Pøeèteme poèty krokù z Adam bufferu
             uint step0 = FeatureAdamBuffer[uniqueI0 * 2].stepCount;
@@ -66,30 +70,31 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float u1 = rand(rng); float u2 = rand(rng); float sqrt_u1 = sqrt(u1);
     float3 barycentrics = float3(1.0f - sqrt_u1, sqrt_u1 * (1.0f - u2), sqrt_u1 * u2);
 
-    // Mesh Colors R=2 logika
-    float u = barycentrics.x * 2.0f; float v = barycentrics.y * 2.0f; float w = barycentrics.z * 2.0f;
-    uint i0, i1, i2; float weight0, weight1, weight2;
+    // Získáme lokální møížkové souøadnice
+    uint i0, j0, i1, j1, i2, j2;
+    float weight0, weight1, weight2;
+    getMeshColorIndicesAndWeights(barycentrics, meshColorResolution, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
 
-    if (u >= 1.0f) { i0 = 0; i1 = 3; i2 = 5; weight0 = u - 1.0f; weight1 = v; weight2 = w; }
-    else if (v >= 1.0f) { i0 = 3; i1 = 1; i2 = 4; weight0 = u; weight1 = v - 1.0f; weight2 = w; }
-    else if (w >= 1.0f) { i0 = 5; i1 = 4; i2 = 2; weight0 = u; weight1 = v; weight2 = w - 1.0f; }
-    else { i0 = 3; i1 = 4; i2 = 5; weight0 = 1.0f - w; weight1 = 1.0f - u; weight2 = 1.0f - v; }
+    uint idx0 = get1DIndex(i0, j0, meshColorResolution);
+    uint idx1 = get1DIndex(i1, j1, meshColorResolution);
+    uint idx2 = get1DIndex(i2, j2, meshColorResolution);
 
-    uint baseIndex = bestTriID * 6;
+    uint baseIndex = bestTriID * pointsPerTri;
     GateEncodingData gateData;
     gateData.barycentrics = float3(weight0, weight1, weight2);
     
-    // Klíèový krok: Pøevod z duplikovaného indexu møížky na unikátní ID!
-    gateData.indices.x = VertexMappingBuffer[baseIndex + i0];
-    gateData.indices.y = VertexMappingBuffer[baseIndex + i1];
-    gateData.indices.z = VertexMappingBuffer[baseIndex + i2];
+    // Pøevod z duplikovaného indexu møížky na unikátní ID!
+    gateData.indices.x = VertexMappingBuffer[baseIndex + idx0];
+    gateData.indices.y = VertexMappingBuffer[baseIndex + idx1];
+    gateData.indices.z = VertexMappingBuffer[baseIndex + idx2];
 
     // For ground truth we use the original triangle to sample the texture, because that's where the UVs are
     GlobalTriangle origTri = GlobalTriangleBuffer[bestTriID];
     float2 uv0 = asfloat(VertexUVBuffer.Load2(origTri.i0 * VertexStride + uvOffset));
     float2 uv1 = asfloat(VertexUVBuffer.Load2(origTri.i1 * VertexStride + uvOffset));
     float2 uv2 = asfloat(VertexUVBuffer.Load2(origTri.i2 * VertexStride + uvOffset));
-    float2 interpUV = gateData.barycentrics.x * uv0 + gateData.barycentrics.y * uv1 + gateData.barycentrics.z * uv2;
+    // Použijeme pùvodní globální 'barycentrics', nikoliv lokální 'gateData.barycentrics'!
+    float2 interpUV = barycentrics.x * uv0 + barycentrics.y * uv1 + barycentrics.z * uv2;
     float3 target = BindlessTextures[origTri.materialIdx * 6].SampleLevel(LinearSampler, interpUV, 0).rgb;
 
     // Forward pass

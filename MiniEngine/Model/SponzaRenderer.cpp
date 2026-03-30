@@ -35,6 +35,7 @@
 #include "CompiledShaders/DepthViewerPS.h"
 #include "CompiledShaders/ModelViewerVS.h"
 #include "CompiledShaders/ModelViewerPS.h"
+#include "CompiledShaders/CutoutDepthPS.h"
 
 #include "Gate.h"
 
@@ -106,7 +107,7 @@ void Sponza::Startup(Camera& Camera)
 
     // Depth-only shading but with alpha testing
     m_CutoutDepthPSO = m_DepthPSO;
-    m_CutoutDepthPSO.SetPixelShader(g_pDepthViewerPS, sizeof(g_pDepthViewerPS));
+    m_CutoutDepthPSO.SetPixelShader(g_pCutoutDepthPS, sizeof(g_pCutoutDepthPS));
     m_CutoutDepthPSO.SetRasterizerState(RasterizerTwoSided);
     m_CutoutDepthPSO.Finalize();
 

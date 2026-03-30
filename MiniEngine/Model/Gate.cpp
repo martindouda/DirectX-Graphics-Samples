@@ -52,11 +52,12 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         for (uint32_t i = 0; i < model.GetMeshCount(); ++i)
             m_TotalTriangles += model.GetMesh(i).indexCount / 3;
 
-        uint32_t totalMeshColorPoints = m_TotalTriangles * 6;
+        // 1. Spoèítáme body na trojúhelník podle aktuálního m_Resolution
+        m_PointsPerTri = (m_Resolution + 1) * (m_Resolution + 2) / 2;
+        uint32_t totalMeshColorPoints = m_TotalTriangles * m_PointsPerTri;
+
         std::unordered_map<Int3, uint32_t, Int3Hash> spatialHashMap;
         std::vector<uint32_t> duplicateToUniqueMap(totalMeshColorPoints);
-        
-        // PØIDÁNO: Znovu alokujeme pole pro globální trojúhelníky
         std::vector<GlobalTriangle> globalTris(m_TotalTriangles);
 
         m_UniqueSpatialVertexCount = 0;
@@ -65,10 +66,18 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         const unsigned char* rawVertexData = model.GetVertexData();
         const unsigned char* rawIndexData = model.GetIndexData();
 
-        const float bary[6][3] = {
-            {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},
-            {0.5f, 0.5f, 0.0f}, {0.0f, 0.5f, 0.5f}, {0.5f, 0.0f, 0.5f} 
-        };
+        // 2. DYNAMICKÉ GENEROVÁNÍ BARYCENTRIK PRO JAKÉKOLIV R
+        std::vector<DirectX::XMFLOAT3> bary(m_PointsPerTri);
+        uint32_t idx = 0;
+        for (uint32_t i = 0; i <= m_Resolution; ++i) {
+            for (uint32_t j = 0; j <= m_Resolution - i; ++j) {
+                uint32_t k = m_Resolution - i - j;
+                bary[idx].x = (float)i / m_Resolution;
+                bary[idx].y = (float)j / m_Resolution;
+                bary[idx].z = (float)k / m_Resolution;
+                idx++;
+            }
+        }
 
         uint32_t triOffset = 0;
 
@@ -94,12 +103,12 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
                 DirectX::XMFLOAT3* p1 = (DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride));
                 DirectX::XMFLOAT3* p2 = (DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride));
 
-                for (int pt = 0; pt < 6; ++pt)
+                for (uint32_t pt = 0; pt < m_PointsPerTri; ++pt)
                 {
                     DirectX::XMFLOAT3 pos;
-                    pos.x = bary[pt][0] * p0->x + bary[pt][1] * p1->x + bary[pt][2] * p2->x;
-                    pos.y = bary[pt][0] * p0->y + bary[pt][1] * p1->y + bary[pt][2] * p2->y;
-                    pos.z = bary[pt][0] * p0->z + bary[pt][1] * p1->z + bary[pt][2] * p2->z;
+                    pos.x = bary[pt].x * p0->x + bary[pt].y * p1->x + bary[pt].z * p2->x;
+                    pos.y = bary[pt].x * p0->y + bary[pt].y * p1->y + bary[pt].z * p2->y;
+                    pos.z = bary[pt].x * p0->z + bary[pt].y * p1->z + bary[pt].z * p2->z;
 
                     Int3 qPos;
                     qPos.x = static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR));
@@ -117,7 +126,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
                         m_UniqueSpatialVertexCount++;
                     }
 
-                    uint32_t globalPointIndex = triOffset * 6 + pt;
+                    uint32_t globalPointIndex = triOffset * m_PointsPerTri + pt;
                     duplicateToUniqueMap[globalPointIndex] = uniqueID;
                 }
                 triOffset++;
@@ -133,7 +142,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
     void Gate::AllocateBuffers()
     {
         // Celkový poèet "rozbalených" bodù (6 na každý trojúhelník)
-        uint32_t totalMeshColorPoints = m_TotalTriangles * 6;
+        uint32_t totalMeshColorPoints = m_TotalTriangles * m_PointsPerTri;
 
         // A. DUPLIKOVANÝ BUFFER (Inference / Ètení v Pixel Shaderu)
         std::vector<GateFeature> duplicatedFeatures(totalMeshColorPoints);
@@ -178,7 +187,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         m_GateRootSig[0].InitAsConstantBuffer(0);
         m_GateRootSig[1].InitAsBufferSRV(0);
         m_GateRootSig[2].InitAsBufferSRV(1);
-        m_GateRootSig[3].InitAsConstants(1, 1);
+        m_GateRootSig[3].InitAsConstants(1, 3);
         m_GateRootSig[4].InitAsBufferSRV(2);
         m_GateRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -203,7 +212,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(13, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 14); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 15); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
 
@@ -279,13 +288,14 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
             uint32_t uvOffset;
             uint32_t screenWidth;
             uint32_t screenHeight;
-            int CustomInt0;
+            uint32_t meshColorResolution;
+            uint32_t pointsPerTri;
         } cb = {
             m_TrainingStep, m_TotalTriangles, m_FeatureLearningRate, m_MLPLearningRate, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
-            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_CustomInt0
+            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_Resolution, m_PointsPerTri
         };
-        trainCtx.SetConstantArray(0, 14, &cb);
+        trainCtx.SetConstantArray(0, 15, &cb);
 
         // --- BACKPROP SETUP ---
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
@@ -317,7 +327,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
 
         // 3. Optimize features
         trainCtx.SetPipelineState(m_GateOptFeatPSO);
-        trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * 2, 64), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * 2, 1024), 1, 1);
 
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
 
@@ -325,7 +335,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
 
-        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles * 6, 64), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles * m_PointsPerTri, 1024), 1, 1);
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -378,7 +388,8 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
             uint32_t baseVertex = mesh.vertexDataByteOffset / m_Model->GetVertexStride();
 
             // Global triangle offset in GatePS to acces the correct features
-            gfxContext.SetConstants(3, globalTriangleOffset);
+            uint32_t inferenceConstants[3] = { globalTriangleOffset, m_Resolution, m_PointsPerTri };
+            gfxContext.SetConstantArray(3, 3, inferenceConstants);
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
 
             globalTriangleOffset += (indexCount / 3);
@@ -403,7 +414,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
 
         ImGui::Text("Hyperparameters");
 
-        ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 8192, "%d groups");
+        ImGui::SliderInt("Backprop Steps (* 1024 triangles)", &m_BackpropDispatchedGroups, 1, 1024, "%d groups");
         ImGui::SliderFloat("Feature Learning Rate", &m_FeatureLearningRate, 0.0001f, 0.1f, "%.5f");
         ImGui::SliderFloat("MLP Learning Rate", &m_MLPLearningRate, 0.00001f, 0.01f, "%.6f");
         ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");

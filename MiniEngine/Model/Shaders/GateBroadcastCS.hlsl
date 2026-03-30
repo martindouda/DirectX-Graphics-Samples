@@ -2,11 +2,11 @@
 
 #include "GateTrainCommon.hlsli"
 
-[numthreads(64, 1, 1)]
+[numthreads(BROADCAST_THREADGROUP_SIZE, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint globalPointID = DTid.x;
-    uint totalMeshColorPoints = totalTriangles * 6;
+    uint totalMeshColorPoints = totalTriangles * pointsPerTri;
 
     if (globalPointID >= totalMeshColorPoints)
         return;

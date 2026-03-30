@@ -123,10 +123,13 @@ namespace Sponza
         ComputePSO m_EncodeColorPSO;
 
 		// --- Hyperparameters and state ---
+        uint32_t m_Resolution = 4;
+        uint32_t m_PointsPerTri;
+
         uint32_t m_TrainingStep = 1;
         bool m_IsTrainingPaused = true;
 
-        int m_BackpropDispatchedGroups = 8192; // * 64 trojúhelníkù na krok
+        int m_BackpropDispatchedGroups = 1024; // * 1024 trojúhelníkù na krok
         float m_FeatureLearningRate = 0.05f;
         float m_MLPLearningRate = 0.002f;
         float m_AdamEpsilon = 1e-8f;
@@ -135,7 +138,7 @@ namespace Sponza
         float m_WeightDecay = 0.01f;
         float m_ScreenSpaceRatio = 0.85f;
 
-        // Custom parametry pro experimenty (napø. Mesh Colors R faktor do budoucna)
+        // Custom parametry pro experimenty
         int m_CustomInt0 = 0;
     };
 }
