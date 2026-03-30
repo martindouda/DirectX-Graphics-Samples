@@ -54,7 +54,7 @@ namespace Sponza
     private:
         // --- Init helpers ---
         void BuildSpatialIndex(const ModelH3D& model);
-        void AllocateBuffers(const ModelH3D& model);
+        void AllocateBuffers();
         void InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
 
         // --- GPU data structures ---

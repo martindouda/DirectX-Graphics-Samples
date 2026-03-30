@@ -38,13 +38,8 @@ namespace Sponza
         m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
         m_VisColorBuffer.Create(L"Visibility Vis Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R8G8B8A8_UNORM);
 
-        // 1. Data Processing
         BuildSpatialIndex(model);
-
-        // 2. Memory Allocation
-        AllocateBuffers(model);
-
-        // 3. Pipeline Setup
+        AllocateBuffers();
         InitializePSOs(colorFormat, depthFormat);
     }
 
@@ -124,7 +119,7 @@ namespace Sponza
         m_VertexMappingBuffer.Create(L"Vertex Mapping Buffer", m_TotalVertices, sizeof(uint32_t), originalToSpatialMap.data());
     }
 
-    void Gate::AllocateBuffers(const ModelH3D& model)
+    void Gate::AllocateBuffers()
     {
         // A. Duplikovaný Feature Buffer
         std::vector<GateFeature> duplicatedFeatures(m_TotalVertices);
@@ -164,11 +159,12 @@ namespace Sponza
     void Gate::InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
         // 1. Setup Inference PSO
-        m_GateRootSig.Reset(4, 0);
+        m_GateRootSig.Reset(5, 0);
         m_GateRootSig[0].InitAsConstantBuffer(0);
         m_GateRootSig[1].InitAsBufferSRV(0);
         m_GateRootSig[2].InitAsBufferSRV(1);
         m_GateRootSig[3].InitAsConstants(1, 1);
+        m_GateRootSig[4].InitAsBufferSRV(2);
         m_GateRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         D3D12_INPUT_ELEMENT_DESC vertElem[] = {
@@ -358,19 +354,22 @@ namespace Sponza
         gfxContext.SetRenderTargets(1, gateRTVs, depthBuffer.GetDSV_DepthReadOnly());
         gfxContext.SetViewportAndScissor(viewport, scissor);
 
-        uint32_t VertexStride = m_Model->GetVertexStride();
+        gfxContext.SetBufferSRV(4, m_GlobalTriangleBuffer);
+
+        uint32_t globalTriangleOffset = 0;
         for (uint32_t meshIndex = 0; meshIndex < m_Model->GetMeshCount(); ++meshIndex)
         {
             const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
             uint32_t indexCount = mesh.indexCount;
             uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
-            uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
+            uint32_t baseVertex = mesh.vertexDataByteOffset / m_Model->GetVertexStride();
 
-            gfxContext.SetConstants(3, baseVertex);
+            // Global triangle offset in GatePS to acces the correct features
+            gfxContext.SetConstants(3, globalTriangleOffset);
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
-        }
 
-        gfxContext.TransitionResource(m_GateColorBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, true);
+            globalTriangleOffset += (indexCount / 3);
+        }
     }
 
     void Gate::RenderGUI()
@@ -403,39 +402,7 @@ namespace Sponza
     void Gate::ResetTraining()
     {
         m_TrainingStep = 1;
-
-        std::vector<GateFeature> duplicatedFeatures(m_TotalVertices);
-        for (uint32_t i = 0; i < m_TotalVertices; ++i)
-        {
-            duplicatedFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-            duplicatedFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-        }
-        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalVertices, sizeof(GateFeature), duplicatedFeatures.data());
-
-        std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
-        for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
-        {
-            uniqueFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-            uniqueFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-        }
-        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_UniqueSpatialVertexCount, sizeof(GateFeature), uniqueFeatures.data());
-
-        std::vector<AdamData> initialFeatureAdam(m_UniqueSpatialVertexCount * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_UniqueSpatialVertexCount * 2, sizeof(AdamData), initialFeatureAdam.data());
-        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_UniqueSpatialVertexCount * 8, sizeof(float), nullptr);
-
-        uint32_t numNetworkParameters = 212;
-        std::vector<float> initialWeights(numNetworkParameters);
-        for (uint32_t i = 0; i < numNetworkParameters; ++i)
-        {
-            initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
-        }
-        m_GateMLPBuffer.Create(L"MLP Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
-
-        std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
-
-        m_GateMLPGradientBuffer.Create(L"MLP Gradients", numNetworkParameters, sizeof(float), nullptr);
+        AllocateBuffers();
     }
 
     void Gate::Cleanup()
