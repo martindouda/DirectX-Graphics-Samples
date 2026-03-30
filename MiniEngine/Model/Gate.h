@@ -86,7 +86,6 @@ namespace Sponza
 
         // Geometry buffers
         StructuredBuffer m_GlobalTriangleBuffer;
-        StructuredBuffer m_SpatialTriangleBuffer;
         StructuredBuffer m_VertexMaterialMap;
 
         // Feature buffers (Cache-coherency architecture)

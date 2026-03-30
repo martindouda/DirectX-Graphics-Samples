@@ -5,17 +5,16 @@
 [numthreads(64, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-    uint totalVertexID = DTid.x;
+    uint globalPointID = DTid.x;
+    uint totalMeshColorPoints = totalTriangles * 6;
 
-    if (totalVertexID >= totalTriangles * 3) // Nebo radìji pøedat totalVertices v cbufferu
+    if (globalPointID >= totalMeshColorPoints)
         return;
 
-    // 1. Zjistíme, do kterého unikátního bodu tento vertex fyzicky patøí
-    uint uniqueID = VertexMappingBuffer[totalVertexID];
+    // 1. Zjistíme unikátní ID z našeho N:M mapování
+    uint uniqueID = VertexMappingBuffer[globalPointID];
 
-    // 2. Pøeèteme natrénovaný vektor z Unique bufferu
+    // 2. Pøeèteme natrénovaný vektor a zapíšeme ho pro vykreslování
     GateFeature feature = UniqueFeatureBuffer[uniqueID];
-
-    // 3. Zapíšeme do finálního bufferu pro inferenci
-    DuplicatedFeatureBuffer[totalVertexID] = feature;
+    DuplicatedFeatureBuffer[globalPointID] = feature;
 }

@@ -43,48 +43,34 @@ namespace Sponza
         InitializePSOs(colorFormat, depthFormat);
     }
 
-    void Gate::BuildSpatialIndex(const ModelH3D& model)
+void Gate::BuildSpatialIndex(const ModelH3D& model)
     {
         uint32_t vertexStride = model.GetVertexStride();
         m_TotalVertices = model.GetVertexBuffer().SizeInBytes / vertexStride;
 
-        // Vertex welding
-        const float QUANTIZATION_FACTOR = 10000.0f;
-        std::unordered_map<Int3, uint32_t, Int3Hash> spatialHashMap;
-        std::vector<uint32_t> originalToSpatialMap(m_TotalVertices);
-        m_UniqueSpatialVertexCount = 0;
-
-        const unsigned char* rawVertexData = model.GetVertexData();
-        for (uint32_t i = 0; i < m_TotalVertices; ++i)
-        {
-            DirectX::XMFLOAT3* pos = (DirectX::XMFLOAT3*)(rawVertexData + (i * vertexStride));
-
-            Int3 qPos;
-            qPos.x = static_cast<int32_t>(std::round(pos->x * QUANTIZATION_FACTOR));
-            qPos.y = static_cast<int32_t>(std::round(pos->y * QUANTIZATION_FACTOR));
-            qPos.z = static_cast<int32_t>(std::round(pos->z * QUANTIZATION_FACTOR));
-
-            auto it = spatialHashMap.find(qPos);
-            if (it != spatialHashMap.end())
-            {
-                originalToSpatialMap[i] = it->second;
-            }
-            else
-            {
-                spatialHashMap[qPos] = m_UniqueSpatialVertexCount;
-                originalToSpatialMap[i] = m_UniqueSpatialVertexCount;
-                m_UniqueSpatialVertexCount++;
-            }
-        }
-
-        // Global Triangles
         m_TotalTriangles = 0;
         for (uint32_t i = 0; i < model.GetMeshCount(); ++i)
             m_TotalTriangles += model.GetMesh(i).indexCount / 3;
 
+        uint32_t totalMeshColorPoints = m_TotalTriangles * 6;
+        std::unordered_map<Int3, uint32_t, Int3Hash> spatialHashMap;
+        std::vector<uint32_t> duplicateToUniqueMap(totalMeshColorPoints);
+        
+        // PØIDÁNO: Znovu alokujeme pole pro globální trojúhelníky
         std::vector<GlobalTriangle> globalTris(m_TotalTriangles);
-        uint32_t triOffset = 0;
+
+        m_UniqueSpatialVertexCount = 0;
+
+        const float QUANTIZATION_FACTOR = 10000.0f;
+        const unsigned char* rawVertexData = model.GetVertexData();
         const unsigned char* rawIndexData = model.GetIndexData();
+
+        const float bary[6][3] = {
+            {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},
+            {0.5f, 0.5f, 0.0f}, {0.0f, 0.5f, 0.5f}, {0.5f, 0.0f, 0.5f} 
+        };
+
+        uint32_t triOffset = 0;
 
         for (uint32_t meshIndex = 0; meshIndex < model.GetMeshCount(); ++meshIndex)
         {
@@ -94,43 +80,71 @@ namespace Sponza
 
             for (uint32_t i = 0; i < mesh.indexCount; i += 3)
             {
-                globalTris[triOffset].i0 = cpuIndexData[i + 0] + baseVertex;
-                globalTris[triOffset].i1 = cpuIndexData[i + 1] + baseVertex;
-                globalTris[triOffset].i2 = cpuIndexData[i + 2] + baseVertex;
+                uint32_t i0 = cpuIndexData[i + 0] + baseVertex;
+                uint32_t i1 = cpuIndexData[i + 1] + baseVertex;
+                uint32_t i2 = cpuIndexData[i + 2] + baseVertex;
+
+                // PØIDÁNO: Uložení dat pro UV souøadnice a textury
+                globalTris[triOffset].i0 = i0;
+                globalTris[triOffset].i1 = i1;
+                globalTris[triOffset].i2 = i2;
                 globalTris[triOffset].materialIdx = mesh.materialIndex;
+
+                DirectX::XMFLOAT3* p0 = (DirectX::XMFLOAT3*)(rawVertexData + (i0 * vertexStride));
+                DirectX::XMFLOAT3* p1 = (DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride));
+                DirectX::XMFLOAT3* p2 = (DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride));
+
+                for (int pt = 0; pt < 6; ++pt)
+                {
+                    DirectX::XMFLOAT3 pos;
+                    pos.x = bary[pt][0] * p0->x + bary[pt][1] * p1->x + bary[pt][2] * p2->x;
+                    pos.y = bary[pt][0] * p0->y + bary[pt][1] * p1->y + bary[pt][2] * p2->y;
+                    pos.z = bary[pt][0] * p0->z + bary[pt][1] * p1->z + bary[pt][2] * p2->z;
+
+                    Int3 qPos;
+                    qPos.x = static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR));
+                    qPos.y = static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR));
+                    qPos.z = static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR));
+
+                    auto it = spatialHashMap.find(qPos);
+                    uint32_t uniqueID;
+                    if (it != spatialHashMap.end()) {
+                        uniqueID = it->second;
+                    }
+                    else {
+                        uniqueID = m_UniqueSpatialVertexCount;
+                        spatialHashMap[qPos] = uniqueID;
+                        m_UniqueSpatialVertexCount++;
+                    }
+
+                    uint32_t globalPointIndex = triOffset * 6 + pt;
+                    duplicateToUniqueMap[globalPointIndex] = uniqueID;
+                }
                 triOffset++;
             }
         }
-        m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
 
-        // Spatial index buffer
-        std::vector<GlobalTriangle> spatialGlobalTris(m_TotalTriangles);
-        for (uint32_t i = 0; i < m_TotalTriangles; ++i)
-        {
-            GlobalTriangle oldTri = globalTris[i];
-            GlobalTriangle newTri;
-            newTri.i0 = originalToSpatialMap[oldTri.i0];
-            newTri.i1 = originalToSpatialMap[oldTri.i1];
-            newTri.i2 = originalToSpatialMap[oldTri.i2];
-            newTri.materialIdx = oldTri.materialIdx;
-            spatialGlobalTris[i] = newTri;
-        }
-        m_SpatialTriangleBuffer.Create(L"Spatial Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), spatialGlobalTris.data());
-        m_VertexMappingBuffer.Create(L"Vertex Mapping Buffer", m_TotalVertices, sizeof(uint32_t), originalToSpatialMap.data());
+        m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", totalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
+        
+        // PØIDÁNO: Vytvoøení bufferu, aby ho GPU mohlo èíst
+        m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
     }
 
     void Gate::AllocateBuffers()
     {
-        // A. Duplikovaný Feature Buffer
-        std::vector<GateFeature> duplicatedFeatures(m_TotalVertices);
-        for (uint32_t i = 0; i < m_TotalVertices; ++i)
+        // Celkový poèet "rozbalených" bodù (6 na každý trojúhelník)
+        uint32_t totalMeshColorPoints = m_TotalTriangles * 6;
+
+        // A. DUPLIKOVANÝ BUFFER (Inference / Ètení v Pixel Shaderu)
+        std::vector<GateFeature> duplicatedFeatures(totalMeshColorPoints);
+        for (uint32_t i = 0; i < totalMeshColorPoints; ++i)
         {
             duplicatedFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
             duplicatedFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalVertices, sizeof(GateFeature), duplicatedFeatures.data());
+        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalMeshColorPoints, sizeof(GateFeature), duplicatedFeatures.data());
 
-        // B. Unikátní Feature Buffer a tréninkové buffery
+        // B. UNIKÁTNÍ BUFFERY (Trénink / Backprop / Optimalizace)
         std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
         for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
         {
@@ -139,11 +153,12 @@ namespace Sponza
         }
         m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_UniqueSpatialVertexCount, sizeof(GateFeature), uniqueFeatures.data());
 
+        // Adam optimalizátor a gradienty pracují POUZE s unikátními daty
         std::vector<AdamData> initialFeatureAdam(m_UniqueSpatialVertexCount * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_UniqueSpatialVertexCount * 2, sizeof(AdamData), initialFeatureAdam.data());
         m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_UniqueSpatialVertexCount * 8, sizeof(float), nullptr);
 
-        // MLP
+        // C. MLP PARAMETRY (Zùstávají beze zmìny)
         uint32_t numNetworkParameters = 212;
         std::vector<float> initialWeights(numNetworkParameters);
         for (uint32_t i = 0; i < numNetworkParameters; ++i)
@@ -187,7 +202,7 @@ namespace Sponza
         m_GatePSO.Finalize();
 
         // 2. Setup Training Root Sig & PSOs
-        m_GateTrainRootSig.Reset(14, 1);
+        m_GateTrainRootSig.Reset(13, 1);
         m_GateTrainRootSig[0].InitAsConstants(0, 14); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
@@ -207,7 +222,6 @@ namespace Sponza
 
         m_GateTrainRootSig[11].InitAsBufferSRV(3); // t3: VertexMappingBuffer
         m_GateTrainRootSig[12].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
-        m_GateTrainRootSig[13].InitAsBufferSRV(5); // t5: SpatialTriangleBuffer
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
@@ -276,7 +290,8 @@ namespace Sponza
         // --- BACKPROP SETUP ---
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_SpatialTriangleBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(11, m_VertexMappingBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
 
         trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
         trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));
@@ -308,11 +323,9 @@ namespace Sponza
 
 		// 4. Broadcast features to duplicates
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(11, m_VertexMappingBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
 
-        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalVertices, 64), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles * 6, 64), 1, 1);
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -416,7 +429,6 @@ namespace Sponza
         m_GlobalTriangleBuffer.Destroy();
         m_VertexMaterialMap.Destroy();
 
-        m_SpatialTriangleBuffer.Destroy();
         m_UniqueFeatureBuffer.Destroy();
         m_VertexMappingBuffer.Destroy();
     }

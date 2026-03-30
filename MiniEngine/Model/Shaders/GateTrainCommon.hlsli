@@ -90,7 +90,6 @@ ByteAddressBuffer                VertexUVBuffer        : register(t1);
 Texture2D<uint>                  VisibilityBuffer      : register(t2, space0);
 StructuredBuffer<uint>           VertexMappingBuffer   : register(t3); // TotalVertexID -> UniqueVertexID
 StructuredBuffer<GateFeature>    UniqueFeatureBuffer   : register(t4); // Unique features for Backprop
-StructuredBuffer<GlobalTriangle> SpatialTriangleBuffer : register(t5); // Welded triangles for Network
 
 SamplerState                     LinearSampler         : register(s0);
 Texture2D<float4>                BindlessTextures[]    : register(t0, space1);
@@ -188,9 +187,9 @@ void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint grad
 
 void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK])
 {
-    GateFeature f0 = DuplicatedFeatureBuffer[gateData.indices.x];
-    GateFeature f1 = DuplicatedFeatureBuffer[gateData.indices.y];
-    GateFeature f2 = DuplicatedFeatureBuffer[gateData.indices.z];
+    GateFeature f0 = UniqueFeatureBuffer[gateData.indices.x];
+    GateFeature f1 = UniqueFeatureBuffer[gateData.indices.y];
+    GateFeature f2 = UniqueFeatureBuffer[gateData.indices.z];
 
     activations[activationIndex++] = gateData.barycentrics.x * f0.data[0] + gateData.barycentrics.y * f1.data[0] + gateData.barycentrics.z * f2.data[0];
     activations[activationIndex++] = gateData.barycentrics.x * f0.data[1] + gateData.barycentrics.y * f1.data[1] + gateData.barycentrics.z * f2.data[1];
