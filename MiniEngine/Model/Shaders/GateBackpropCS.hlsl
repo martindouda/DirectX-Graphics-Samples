@@ -32,27 +32,18 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
             uint baseIdx = candidateTriID * pointsPerTri;
             
-            // Získáme 1D indexy rohù v rámci møížky s rozlišením R
-            uint cornerU_1D = get1DIndex(meshColorResolution, 0, meshColorResolution);
-            uint cornerV_1D = get1DIndex(0, meshColorResolution, meshColorResolution);
-            uint cornerW_1D = get1DIndex(0, 0, meshColorResolution);
+            uint randomPt = min((uint)(rand(rng) * pointsPerTri), pointsPerTri - 1);
+            
+            // Získáme unikátní ID pro tento jeden bod
+            uint uniquePt = VertexMappingBuffer[baseIdx + randomPt]; 
 
-            // Získáme unikátní ID našich 3 rohù trojúhelníku
-            uint uniqueI0 = VertexMappingBuffer[baseIdx + cornerU_1D]; 
-            uint uniqueI1 = VertexMappingBuffer[baseIdx + cornerV_1D]; 
-            uint uniqueI2 = VertexMappingBuffer[baseIdx + cornerW_1D]; 
+            // Pøeèteme poèet krokù z Adam bufferu POUZE pro tento vybraný bod
+            uint stepCount = FeatureAdamBuffer[uniquePt * 2].stepCount;
 
-            // Pøeèteme poèty krokù z Adam bufferu
-            uint step0 = FeatureAdamBuffer[uniqueI0 * 2].stepCount;
-            uint step1 = FeatureAdamBuffer[uniqueI1 * 2].stepCount;
-            uint step2 = FeatureAdamBuffer[uniqueI2 * 2].stepCount;
-
-            // Spoèítáme prùmìr natrénovanosti tohoto trojúhelníku
-            uint avgStep = (step0 + step1 + step2) / 3;
-
-            if (avgStep < lowestStepCount)
+            // Zkontrolujeme, jestli je tento bod ménì natrénovaný než náš dosavadní nejhorší
+            if (stepCount < lowestStepCount)
             {
-                lowestStepCount = avgStep;
+                lowestStepCount = stepCount;
                 bestTriID = candidateTriID;
                 foundValidCandidate = true;
             }
@@ -110,4 +101,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
     backpropLayer(target, activations, errors, 4, 1, 2, 6, 36, OUTPUT_LAYER);   // Output -> Hidden
     backpropLayer(target, activations, errors, 2, 4, 0, 2, 0,  HIDDEN_LAYER);   // Hidden -> Input
     gateEncodingBackprop(gateData, errors);                                     // Distribute to Vertices
+
+    float3 diff = target - activations[6].xyz; // Output vrstva zaèíná na indexu 36
+    float pixelLoss = dot(diff, diff); // MSE (Mean Squared Error)
+    
+    // Trik: vynásobíme milionem a bezpeènì seèteme ze všech vláken
+    LossBuffer.InterlockedAdd(0, (uint)(pixelLoss * 1000.0f));
 }

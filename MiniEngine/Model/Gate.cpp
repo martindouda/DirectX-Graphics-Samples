@@ -4,6 +4,8 @@
 #include <vector>
 #include <unordered_map>
 #include <DirectXMath.h>
+#include <chrono>
+#include <algorithm>
 
 #include "Gate.h"
 #include "Renderer.h"
@@ -38,12 +40,16 @@ namespace Sponza
         m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
         m_VisColorBuffer.Create(L"Visibility Vis Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R8G8B8A8_UNORM);
 
+        m_LossHistory.resize(MAX_LOSS_HISTORY, 0.0f);
+        m_LossBuffer.Create(L"Loss Buffer", 1, 4);
+        m_LossReadbackBuffer.Create(L"Loss Readback", 1, 4);
+
         BuildSpatialIndex(model);
         AllocateBuffers();
         InitializePSOs(colorFormat, depthFormat);
     }
 
-void Gate::BuildSpatialIndex(const ModelH3D& model)
+    void Gate::BuildSpatialIndex(const ModelH3D& model)
     {
         uint32_t vertexStride = model.GetVertexStride();
         m_TotalVertices = model.GetVertexBuffer().SizeInBytes / vertexStride;
@@ -211,7 +217,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         m_GatePSO.Finalize();
 
         // 2. Setup Training Root Sig & PSOs
-        m_GateTrainRootSig.Reset(13, 1);
+        m_GateTrainRootSig.Reset(14, 1);
         m_GateTrainRootSig[0].InitAsConstants(0, 15); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
@@ -228,9 +234,11 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         m_GateTrainRootSig[8].InitAsBufferUAV(3); // u3
         m_GateTrainRootSig[9].InitAsBufferUAV(4); // u4
         m_GateTrainRootSig[10].InitAsBufferUAV(5); // u5
+        m_GateTrainRootSig[11].InitAsBufferUAV(6); // u6
 
-        m_GateTrainRootSig[11].InitAsBufferSRV(3); // t3: VertexMappingBuffer
-        m_GateTrainRootSig[12].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
+        m_GateTrainRootSig[12].InitAsBufferSRV(3); // t3: VertexMappingBuffer
+        m_GateTrainRootSig[13].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
+
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
@@ -267,11 +275,18 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         if (m_IsTrainingPaused)
             return;
 
+        uint32_t zero = 0;
+        trainCtx.TransitionResource(m_LossBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        trainCtx.FillBuffer(m_LossBuffer, 0, zero, sizeof(uint32_t));
+
         uint32_t uvOffset = m_Model->GetMesh(0).attrib[ModelH3D::attrib_texcoord0].offset;
         uint32_t VertexStride = m_Model->GetVertexStride();
 
         trainCtx.SetRootSignature(m_GateTrainRootSig);
         trainCtx.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
+        
+        float actualFeatureLR = m_GlobalLearningRate * (1.0f - m_LearningRateRatio);
+        float actualMLPLR = m_GlobalLearningRate * m_LearningRateRatio * 0.05f;
 
         struct TrainingConstants
         {
@@ -291,17 +306,18 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
             uint32_t meshColorResolution;
             uint32_t pointsPerTri;
         } cb = {
-            m_TrainingStep, m_TotalTriangles, m_FeatureLearningRate, m_MLPLearningRate, m_AdamEpsilon,
+            m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_Resolution, m_PointsPerTri
         };
         trainCtx.SetConstantArray(0, 15, &cb);
 
         // --- BACKPROP SETUP ---
+
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(11, m_VertexMappingBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_VertexMappingBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
 
         trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
         trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));
@@ -313,6 +329,7 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
         trainCtx.SetBufferUAV(8, m_GateMLPBuffer);
         trainCtx.SetBufferUAV(9, m_GateMLPGradientBuffer);
         trainCtx.SetBufferUAV(10, m_GateMLPAdamBuffer);
+        trainCtx.SetBufferUAV(11, m_LossBuffer);
 
         // 1. Backprop
         trainCtx.SetPipelineState(m_GateBackpropPSO);
@@ -339,6 +356,44 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+        uint32_t* mappedData = (uint32_t*)m_LossReadbackBuffer.Map();
+        if (mappedData)
+        {
+            // Statické promìnné pro mìøení èasu a prùmìrování mezi framy
+            static auto lastRecordTime = std::chrono::high_resolution_clock::now();
+            static float accumulatedLoss = 0.0f;
+            static uint32_t lossSamples = 0;
+
+            // Spoèítáme loss pro TENTO konkrétní frame
+            float totalLoss = (float)(mappedData[0]) / 1000.0f;
+            float frameAverageLoss = totalLoss / (m_BackpropDispatchedGroups * 1024.0f);
+
+            // Pøièteme do naší "èekárny"
+            accumulatedLoss += frameAverageLoss;
+            lossSamples++;
+
+            // Zkontrolujeme, kolik èasu ubìhlo
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            float elapsedTime = std::chrono::duration<float>(currentTime - lastRecordTime).count();
+
+            if (elapsedTime >= 0.1f)
+            {
+                m_LossHistory[m_LossHistoryOffset] = accumulatedLoss / (float)lossSamples;
+                m_LossHistoryOffset = (m_LossHistoryOffset + 1) % MAX_LOSS_HISTORY;
+
+                // Resetujeme poèítadla pro další pùlsekundu
+                accumulatedLoss = 0.0f;
+                lossSamples = 0;
+                lastRecordTime = currentTime;
+            }
+
+            m_LossReadbackBuffer.Unmap();
+        }
+
+        // 2. Až TEÏ zadáme GPU pøíkaz, a zkopíruje data z AKTUÁLNÍHO snímku pro pøíštì
+        trainCtx.TransitionResource(m_LossBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        trainCtx.GetCommandList()->CopyResource(m_LossReadbackBuffer.GetResource(), m_LossBuffer.GetResource());
 
         m_TrainingStep++;
     }
@@ -399,27 +454,40 @@ void Gate::BuildSpatialIndex(const ModelH3D& model)
     void Gate::RenderGUI()
     {
         ImGui::Begin("GATE Training Configuration");
-
+        
+        ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
-
-        ImGui::Checkbox("Pause Training", &m_IsTrainingPaused);
-
         if (ImGui::Button("Reset Training", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
             ResetTraining();
-
+        ImGui::Checkbox("Pause Training", &m_IsTrainingPaused);
         ImGui::Spacing();
+
         ImGui::Separator();
         ImGui::Spacing();
-
-        ImGui::Text("Hyperparameters");
-
-        ImGui::SliderInt("Backprop Steps (* 1024 triangles)", &m_BackpropDispatchedGroups, 1, 1024, "%d groups");
-        ImGui::SliderFloat("Feature Learning Rate", &m_FeatureLearningRate, 0.0001f, 0.1f, "%.5f");
-        ImGui::SliderFloat("MLP Learning Rate", &m_MLPLearningRate, 0.00001f, 0.01f, "%.6f");
+        ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 1024, "%d Groups * 1024 Threads");
         ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");
+        ImGui::Spacing();
 
-        ImGui::SliderInt("Custom Int 0", &m_CustomInt0, 0, 100000);
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::SliderFloat("Learning Rate", &m_GlobalLearningRate, 0.00001f, 0.1f, "%.6f");
+        ImGui::SliderFloat("Features/MLP Ratio", &m_LearningRateRatio, 0.0f, 1.0f, "%.2f");
+        ImGui::Spacing();
+
+        ImGui::Separator();
+        ImGui::Spacing();
+		ImGui::Text("Training Loss (MSE)"); // Mean Squared Error
+        float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
+        char overlay[32];
+        sprintf_s(overlay, "Loss: %.5f", currentLoss);
+        float maxLoss = *std::max_element(m_LossHistory.begin(), m_LossHistory.end());
+        float graphMax = std::max(maxLoss * 1.2f, 0.001f);
+        float graphHeight = 120.f;
+        ImGui::PlotLines("##LossGraph", m_LossHistory.data(), MAX_LOSS_HISTORY, m_LossHistoryOffset, overlay,
+            0.0f, graphMax, ImVec2(ImGui::GetContentRegionAvail().x, graphHeight));
+        ImGui::Spacing();
+
         ImGui::End();
     }
 

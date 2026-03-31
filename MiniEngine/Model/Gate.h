@@ -4,6 +4,7 @@
 
 #include "GraphicsCore.h"
 #include "BufferManager.h"
+#include "ReadbackBuffer.h"
 #include "PipelineState.h"
 #include "RootSignature.h"
 #include "CommandContext.h"
@@ -130,15 +131,20 @@ namespace Sponza
         bool m_IsTrainingPaused = true;
 
         int m_BackpropDispatchedGroups = 1024; // * 1024 trojúhelníkù na krok
-        float m_FeatureLearningRate = 0.05f;
-        float m_MLPLearningRate = 0.002f;
+        float m_GlobalLearningRate = 0.01f;
+        float m_LearningRateRatio = 0.5f;
         float m_AdamEpsilon = 1e-8f;
         float m_AdamBeta1 = 0.9f;
         float m_AdamBeta2 = 0.999f;
         float m_WeightDecay = 0.01f;
         float m_ScreenSpaceRatio = 0.85f;
 
-        // Custom parametry pro experimenty
-        int m_CustomInt0 = 0;
+        // Pøidej nìkam k promìnným tøídy Gate:
+        std::vector<float> m_LossHistory;
+        uint32_t m_LossHistoryOffset = 0;
+        const uint32_t MAX_LOSS_HISTORY = 100;
+
+		ByteAddressBuffer m_LossBuffer;        // GPU writes here the loss value after each training step
+		ReadbackBuffer m_LossReadbackBuffer;   // CPU reads the loss value from here
     };
 }

@@ -109,6 +109,7 @@ RWStructuredBuffer<AdamData>     FeatureAdamBuffer       : register(u2);
 RWStructuredBuffer<float4>       MLPParameterBuffer      : register(u3);
 RWStructuredBuffer<int4>         MLPGradientBuffer       : register(u4);
 RWStructuredBuffer<AdamData>     MLPAdamBuffer           : register(u5);
+RWByteAddressBuffer LossBuffer : register(u6);
 #endif
 
 // =========================================================================
