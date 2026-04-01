@@ -29,9 +29,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (DTid.x >= width || DTid.y >= height) return;
 
     uint triID = VisibilityBuffer[DTid.xy];
-    
-    // Assuming you clear your Visibility Buffer to 0xFFFFFFFF
-    if (triID == 0xFFFFFFFF) 
+
+    if (triID == 0) 
     {
         VisOutput[DTid.xy] = float4(0.1f, 0.1f, 0.1f, 1.0f); // Dark grey for sky
     }

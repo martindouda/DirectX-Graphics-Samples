@@ -275,7 +275,10 @@ void backpropLayer(const float3 target, inout float4 activations[ACTIVATION_QUAR
 float4 ApplyAdam(float4 gradient, float4 currentValue, inout AdamData adamData, float lr, float wd)
 {
     adamData.stepCount += 1;
-
+    
+    if (adamData.stepCount > 1024)
+        adamData.stepCount = 1024;
+    
     float localBeta1T = pow(adamBeta1, (float)adamData.stepCount);
     float localBeta2T = pow(adamBeta2, (float)adamData.stepCount);
 

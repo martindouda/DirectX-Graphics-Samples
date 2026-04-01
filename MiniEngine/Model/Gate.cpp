@@ -25,7 +25,7 @@ namespace Sponza
 {
     Gate::Gate() :
         m_GatePSO(L"GATE: Forward PSO"), m_GateBackpropPSO(L"GATE: Backprop"), m_GateOptMLPPSO(L"GATE: Optimize MLP"),
-        m_GateOptFeatPSO(L"GATE: Optimize Features"), m_EncodeColorPSO(L"GATE: Encode UVs CS"), m_Model(nullptr)
+        m_GateOptFeatPSO(L"GATE: Optimize Features"), m_EncodeColorPSO(L"GATE: Encode UVs CS"), m_Model(nullptr), m_PointsPerTri(0)
     {
     }
 
@@ -44,19 +44,19 @@ namespace Sponza
         m_LossBuffer.Create(L"Loss Buffer", 1, 4);
         m_LossReadbackBuffer.Create(L"Loss Readback", 1, 4);
 
-        BuildSpatialIndex(model);
+        BuildSpatialIndex();
         AllocateBuffers();
         InitializePSOs(colorFormat, depthFormat);
     }
 
-    void Gate::BuildSpatialIndex(const ModelH3D& model)
+    void Gate::BuildSpatialIndex()
     {
-        uint32_t vertexStride = model.GetVertexStride();
-        m_TotalVertices = model.GetVertexBuffer().SizeInBytes / vertexStride;
+        uint32_t vertexStride = m_Model->GetVertexStride();
+        m_TotalVertices = m_Model->GetVertexBuffer().SizeInBytes / vertexStride;
 
         m_TotalTriangles = 0;
-        for (uint32_t i = 0; i < model.GetMeshCount(); ++i)
-            m_TotalTriangles += model.GetMesh(i).indexCount / 3;
+        for (uint32_t i = 0; i < m_Model->GetMeshCount(); ++i)
+            m_TotalTriangles += m_Model->GetMesh(i).indexCount / 3;
 
         // 1. Spoèítáme body na trojúhelník podle aktuálního m_Resolution
         m_PointsPerTri = (m_Resolution + 1) * (m_Resolution + 2) / 2;
@@ -69,8 +69,8 @@ namespace Sponza
         m_UniqueSpatialVertexCount = 0;
 
         const float QUANTIZATION_FACTOR = 10000.0f;
-        const unsigned char* rawVertexData = model.GetVertexData();
-        const unsigned char* rawIndexData = model.GetIndexData();
+        const unsigned char* rawVertexData = m_Model->GetVertexData();
+        const unsigned char* rawIndexData = m_Model->GetIndexData();
 
         // 2. DYNAMICKÉ GENEROVÁNÍ BARYCENTRIK PRO JAKÉKOLIV R
         std::vector<DirectX::XMFLOAT3> bary(m_PointsPerTri);
@@ -87,9 +87,9 @@ namespace Sponza
 
         uint32_t triOffset = 0;
 
-        for (uint32_t meshIndex = 0; meshIndex < model.GetMeshCount(); ++meshIndex)
+        for (uint32_t meshIndex = 0; meshIndex < m_Model->GetMeshCount(); ++meshIndex)
         {
-            const ModelH3D::Mesh& mesh = model.GetMesh(meshIndex);
+            const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
             uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
             const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
 
@@ -471,7 +471,7 @@ namespace Sponza
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::SliderFloat("Learning Rate", &m_GlobalLearningRate, 0.00001f, 0.1f, "%.6f");
+        ImGui::SliderFloat("Learning Rate", &m_GlobalLearningRate, 0.00001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("Features/MLP Ratio", &m_LearningRateRatio, 0.0f, 1.0f, "%.2f");
         ImGui::Spacing();
 

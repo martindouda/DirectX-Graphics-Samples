@@ -1,4 +1,5 @@
 // File: GateBackpropCS.hlsl
+
 #include "GateTrainCommon.hlsli"
 
 // =========================================================================
@@ -23,18 +24,20 @@ void main(uint3 DTid : SV_DispatchThreadID)
         {
             uint2 pixelCoord = uint2((uint)(rand(rng) * screenWidth),  (uint)(rand(rng) * screenHeight));
 
-            // Look up the Triangle ID visible at this pixel
-            uint candidateTriID = VisibilityBuffer.Load(int3(pixelCoord, 0)).r;
+            uint rawID = VisibilityBuffer.Load(int3(pixelCoord, 0)).r;
 
-            // If it hit the skybox, skip it
+            if (rawID == 0) // Zero is sky
+                continue;
+
+            uint candidateTriID = rawID - 1;
+
             if (candidateTriID >= totalTriangles)
                 continue;
 
             uint baseIdx = candidateTriID * pointsPerTri;
             
+            // We get the unique id for this point
             uint randomPt = min((uint)(rand(rng) * pointsPerTri), pointsPerTri - 1);
-            
-            // Získáme unikátní ID pro tento jeden bod
             uint uniquePt = VertexMappingBuffer[baseIdx + randomPt]; 
 
             // Pøeèteme poèet krokù z Adam bufferu POUZE pro tento vybraný bod

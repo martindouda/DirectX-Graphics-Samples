@@ -40,5 +40,5 @@ uint main(VSOutput vsOutput, uint primitiveID : SV_PrimitiveID) : SV_Target0
 #endif
 
     // Calculate and return the global triangle ID
-    return globalTriangleOffset + primitiveID;
+    return globalTriangleOffset + primitiveID + 1;
 }

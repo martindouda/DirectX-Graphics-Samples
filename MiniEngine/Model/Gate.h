@@ -54,7 +54,7 @@ namespace Sponza
 
     private:
         // --- Init helpers ---
-        void BuildSpatialIndex(const ModelH3D& model);
+        void BuildSpatialIndex();
         void AllocateBuffers();
         void InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
 
@@ -131,13 +131,13 @@ namespace Sponza
         bool m_IsTrainingPaused = true;
 
         int m_BackpropDispatchedGroups = 1024; // * 1024 trojúhelníkù na krok
-        float m_GlobalLearningRate = 0.01f;
+        float m_GlobalLearningRate = 0.1f;
         float m_LearningRateRatio = 0.5f;
         float m_AdamEpsilon = 1e-8f;
         float m_AdamBeta1 = 0.9f;
         float m_AdamBeta2 = 0.999f;
         float m_WeightDecay = 0.01f;
-        float m_ScreenSpaceRatio = 0.85f;
+        float m_ScreenSpaceRatio = 0.95f;
 
         // Pøidej nìkam k promìnným tøídy Gate:
         std::vector<float> m_LossHistory;
