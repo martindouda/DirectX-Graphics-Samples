@@ -1,5 +1,7 @@
 // Gate.cpp
 
+#include "Gate.h"
+
 #include <imgui/imgui.h>
 #include <vector>
 #include <unordered_map>
@@ -9,10 +11,10 @@
 #include <ppl.h>
 #include <numeric>
 
-#include "Gate.h"
 #include "Renderer.h"
 #include "EngineTuning.h"
 
+// Compiled Shaders
 #include "CompiledShaders/GateVS.h"
 #include "CompiledShaders/GatePS.h"
 #include "CompiledShaders/EncodeUVCS.h"
@@ -25,11 +27,26 @@
 using namespace Math;
 using namespace Graphics;
 
+// --- External Dependencies ---
+extern Microsoft::WRL::ComPtr<ID3D12Resource> g_bvh_topLevelAccelerationStructure;
+
 namespace Sponza
 {
+    extern NumVar m_SunOrientation;
+    extern NumVar m_SunInclination;
+    extern ExpVar m_SunLightIntensity;
+    // =========================================================================
+    // Constructor & Destructor
+    // =========================================================================
+
     Gate::Gate() :
-        m_GatePSO(L"GATE: Forward PSO"), m_GateBackpropPSO(L"GATE: Backprop"), m_GateOptMLPPSO(L"GATE: Optimize MLP"),
-        m_GateOptFeatPSO(L"GATE: Optimize Features"), m_EncodeColorPSO(L"GATE: Encode UVs CS"), m_Model(nullptr), m_PointsPerTri(0)
+        m_GatePSO(L"GATE: Forward PSO"),
+        m_GateBackpropPSO(L"GATE: Backprop"),
+        m_GateOptMLPPSO(L"GATE: Optimize MLP"),
+        m_GateOptFeatPSO(L"GATE: Optimize Features"),
+        m_EncodeColorPSO(L"GATE: Encode UVs CS"),
+        m_Model(nullptr),
+        m_PointsPerTri(0)
     {
     }
 
@@ -38,9 +55,14 @@ namespace Sponza
         Cleanup();
     }
 
+    // =========================================================================
+    // Lifecycle
+    // =========================================================================
+
     void Gate::Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
         m_Model = &model;
+
         m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
         m_VisColorBuffer.Create(L"Visibility Vis Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R8G8B8A8_UNORM);
 
@@ -52,28 +74,55 @@ namespace Sponza
         AllocateBuffers();
         InitializePSOs(colorFormat, depthFormat);
 
-        // --- Inicializace HW GPU Timerù ---
+        // --- Initialize HW GPU Timers ---
         D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
-        queryHeapDesc.Count = 10; // Potøebujeme 10 razítek
+        queryHeapDesc.Count = 10; // We need 10 timestamps
         queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
         Graphics::g_Device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(&m_GpuTimerHeap));
 
         auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
         auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(10 * sizeof(uint64_t));
-        Graphics::g_Device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+        Graphics::g_Device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_GpuTimerReadback));
 
-        // Zjistíme frekvenci èipu (tiky za sekundu), abychom to mohli pøevést na milisekundy
+        // Get the GPU timestamp frequency (ticks per second) to convert to milliseconds
         Graphics::g_CommandManager.GetGraphicsQueue().GetCommandQueue()->GetTimestampFrequency(&m_GpuTimestampFreq);
     }
 
-    struct GateMeshInfo
+    void Gate::ResetTraining()
     {
-        uint32_t basePointIndex;
-        uint32_t startTriIndex;
-        uint32_t resolution;
-        uint32_t pointsPerTri;
-    };
+        Graphics::g_CommandManager.IdleGPU();
+        m_TrainingStep = 1;
+
+        m_Resolution = m_DesiredResolution;
+        BuildSpatialIndex();
+        AllocateBuffers();
+
+        std::fill(m_LossHistory.begin(), m_LossHistory.end(), 0.0f);
+        m_LossHistoryOffset = 0;
+    }
+
+    void Gate::Cleanup()
+    {
+        m_GateFeatureBuffer.Destroy();
+        m_GateFeatureGradientBuffer.Destroy();
+        m_GateFeatureAdamBuffer.Destroy();
+
+        m_GateMLPBuffer.Destroy();
+        m_GateMLPGradientBuffer.Destroy();
+        m_GateMLPAdamBuffer.Destroy();
+
+        m_GlobalTriangleBuffer.Destroy();
+        m_VertexMaterialMap.Destroy();
+
+        m_UniqueFeatureBuffer.Destroy();
+        m_VertexMappingBuffer.Destroy();
+    }
+
+    // =========================================================================
+    // Setup & Initialization Helpers
+    // =========================================================================
 
     void Gate::BuildSpatialIndex()
     {
@@ -82,7 +131,7 @@ namespace Sponza
         uint32_t vertexStride = m_Model->GetVertexStride();
         m_TotalVertices = m_Model->GetVertexBuffer().SizeInBytes / vertexStride;
 
-        // 1. Pøedpoèítání offsetù trojúhelníkù pro každý mesh, abychom mohli bìžet paralelnì
+        // 1. Precompute triangle offsets for each mesh to allow parallel processing
         uint32_t numMeshes = m_Model->GetMeshCount();
         std::vector<uint32_t> meshTriOffsets(numMeshes);
         m_TotalTriangles = 0;
@@ -99,18 +148,20 @@ namespace Sponza
         std::vector<uint32_t> duplicateToUniqueMap(totalMeshColorPoints);
         std::vector<GlobalTriangle> globalTris(m_TotalTriangles);
 
-        // Nové ploché pole pro všechny vygenerované pozice
+        // New flat array for all generated positions
         std::vector<Int3> allQuantizedPositions(totalMeshColorPoints);
 
         const float QUANTIZATION_FACTOR = 10000.0f;
         const unsigned char* rawVertexData = m_Model->GetVertexData();
         const unsigned char* rawIndexData = m_Model->GetIndexData();
 
-        // Dynamické generování barycentrik
+        // Dynamic generation of barycentric coordinates
         std::vector<DirectX::XMFLOAT3> bary(m_PointsPerTri);
         uint32_t idx = 0;
-        for (uint32_t i = 0; i <= m_Resolution; ++i) {
-            for (uint32_t j = 0; j <= m_Resolution - i; ++j) {
+        for (uint32_t i = 0; i <= m_Resolution; ++i)
+        {
+            for (uint32_t j = 0; j <= m_Resolution - i; ++j)
+            {
                 uint32_t k = m_Resolution - i - j;
                 bary[idx].x = (float)i / m_Resolution;
                 bary[idx].y = (float)j / m_Resolution;
@@ -119,9 +170,7 @@ namespace Sponza
             }
         }
 
-        // =========================================================================
-        // FÁZE 1: Paralelní generování bodù pøes všechny meshe (PPL)
-        // =========================================================================
+        // --- PHASE 1: Parallel point generation across all meshes (PPL) ---
         concurrency::parallel_for(uint32_t(0), numMeshes, [&](uint32_t meshIndex)
             {
                 const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
@@ -157,7 +206,7 @@ namespace Sponza
                         qPos.y = static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR));
                         qPos.z = static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR));
 
-                        // Bezpeèný paralelní zápis bez zamykání
+                        // Safe parallel write without locking
                         uint32_t globalPointIndex = localTriOffset * m_PointsPerTri + pt;
                         allQuantizedPositions[globalPointIndex] = qPos;
                     }
@@ -165,24 +214,21 @@ namespace Sponza
                 }
             });
 
-        // =========================================================================
-        // FÁZE 2: Paralelní seøazení indexù podle 3D pozice (PPL)
-        // =========================================================================
+        // --- PHASE 2: Parallel sorting of indices by 3D position (PPL) ---
         std::vector<uint32_t> sortIndices(totalMeshColorPoints);
         std::iota(sortIndices.begin(), sortIndices.end(), 0);
 
-        // Komparátor porovná dvì kvantizované pozice a seøadí pole indexù
-        concurrency::parallel_sort(sortIndices.begin(), sortIndices.end(), [&](uint32_t a, uint32_t b) {
-            const Int3& posA = allQuantizedPositions[a];
-            const Int3& posB = allQuantizedPositions[b];
-            if (posA.x != posB.x) return posA.x < posB.x;
-            if (posA.y != posB.y) return posA.y < posB.y;
-            return posA.z < posB.z;
+        // Comparator compares two quantized positions and sorts the index array
+        concurrency::parallel_sort(sortIndices.begin(), sortIndices.end(), [&](uint32_t a, uint32_t b) 
+            {
+                const Int3& posA = allQuantizedPositions[a];
+                const Int3& posB = allQuantizedPositions[b];
+                if (posA.x != posB.x) return posA.x < posB.x;
+                if (posA.y != posB.y) return posA.y < posB.y;
+                return posA.z < posB.z;
             });
 
-        // =========================================================================
-        // FÁZE 3: Lineární pøidìlení Unique ID (extrémnì rychlé, cache-friendly)
-        // =========================================================================
+        // --- PHASE 3: Linear assignment of Unique IDs (cache-friendly) ---
         m_UniqueSpatialVertexCount = 0;
         if (totalMeshColorPoints > 0)
         {
@@ -196,19 +242,16 @@ namespace Sponza
                 const Int3& currPos = allQuantizedPositions[currIdx];
                 const Int3& prevPos = allQuantizedPositions[prevIdx];
 
-                // Pokud se pozice liší od pøedchozí, našli jsme nový unikátní bod
-                if (currPos.x != prevPos.x || currPos.y != prevPos.y || currPos.z != prevPos.z) {
+                // If the position differs from the previous one, we found a new unique point
+                if (currPos.x != prevPos.x || currPos.y != prevPos.y || currPos.z != prevPos.z)
                     m_UniqueSpatialVertexCount++;
-                }
 
                 duplicateToUniqueMap[currIdx] = m_UniqueSpatialVertexCount;
             }
-            m_UniqueSpatialVertexCount++; // Protože jsme zaèínali od 0
+            m_UniqueSpatialVertexCount++; // Because we started from 0
         }
 
-        // =========================================================================
-        // FÁZE 4: Vytvoøení bufferù
-        // =========================================================================
+        // --- PHASE 4: Buffer Creation ---
         m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", totalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
         m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
 
@@ -218,10 +261,10 @@ namespace Sponza
 
     void Gate::AllocateBuffers()
     {
-        // Celkový poèet "rozbalených" bodù (6 na každý trojúhelník)
+        // Total number of 'unpacked' points (points per triangle)
         uint32_t totalMeshColorPoints = m_TotalTriangles * m_PointsPerTri;
 
-        // A. DUPLIKOVANÝ BUFFER (Inference / Ètení v Pixel Shaderu)
+        // A. DUPLICATED BUFFER (Inference / Reading in Pixel Shader)
         std::vector<GateFeature> duplicatedFeatures(totalMeshColorPoints);
         for (uint32_t i = 0; i < totalMeshColorPoints; ++i)
         {
@@ -230,7 +273,7 @@ namespace Sponza
         }
         m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalMeshColorPoints, sizeof(GateFeature), duplicatedFeatures.data());
 
-        // B. UNIKÁTNÍ BUFFERY (Trénink / Backprop / Optimalizace)
+        // B. UNIQUE BUFFERS (Training / Backprop / Optimization)
         std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
         for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
         {
@@ -239,12 +282,12 @@ namespace Sponza
         }
         m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_UniqueSpatialVertexCount, sizeof(GateFeature), uniqueFeatures.data());
 
-        // Adam optimalizátor a gradienty pracují POUZE s unikátními daty
+        // Adam optimizer and gradients work ONLY with unique data
         std::vector<AdamData> initialFeatureAdam(m_UniqueSpatialVertexCount * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_UniqueSpatialVertexCount * 2, sizeof(AdamData), initialFeatureAdam.data());
         m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_UniqueSpatialVertexCount * 8, sizeof(float), nullptr);
 
-        // C. MLP PARAMETRY (Zùstávají beze zmìny)
+        // C. MLP PARAMETERS (Remain unchanged)
         uint32_t numNetworkParameters = 212;
         std::vector<float> initialWeights(numNetworkParameters);
         for (uint32_t i = 0; i < numNetworkParameters; ++i)
@@ -302,18 +345,17 @@ namespace Sponza
         m_GateTrainRootSig[4].InitAsDescriptorTable(1);
         m_GateTrainRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1); // Bindless
 
-        m_GateTrainRootSig[5].InitAsBufferUAV(0); // u0
-        m_GateTrainRootSig[6].InitAsBufferUAV(1); // u1
-        m_GateTrainRootSig[7].InitAsBufferUAV(2); // u2
-        m_GateTrainRootSig[8].InitAsBufferUAV(3); // u3
-        m_GateTrainRootSig[9].InitAsBufferUAV(4); // u4
+        m_GateTrainRootSig[5].InitAsBufferUAV(0);  // u0
+        m_GateTrainRootSig[6].InitAsBufferUAV(1);  // u1
+        m_GateTrainRootSig[7].InitAsBufferUAV(2);  // u2
+        m_GateTrainRootSig[8].InitAsBufferUAV(3);  // u3
+        m_GateTrainRootSig[9].InitAsBufferUAV(4);  // u4
         m_GateTrainRootSig[10].InitAsBufferUAV(5); // u5
         m_GateTrainRootSig[11].InitAsBufferUAV(6); // u6
 
         m_GateTrainRootSig[12].InitAsBufferSRV(3); // t3: VertexMappingBuffer
         m_GateTrainRootSig[13].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
         m_GateTrainRootSig[14].InitAsBufferSRV(5); // t5: TLAS for Ray Queries
-
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
@@ -345,6 +387,10 @@ namespace Sponza
         m_VisPSO.Finalize();
     }
 
+    // =========================================================================
+    // Core Execution
+    // =========================================================================
+
     void Gate::Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection)
     {
         if (m_IsTrainingPaused)
@@ -359,7 +405,7 @@ namespace Sponza
 
         trainCtx.SetRootSignature(m_GateTrainRootSig);
         trainCtx.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
-        
+
         float actualFeatureLR = m_GlobalLearningRate * (1.0f - m_LearningRateRatio);
         float actualMLPLR = m_GlobalLearningRate * m_LearningRateRatio * 0.05f;
 
@@ -398,7 +444,6 @@ namespace Sponza
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_VertexMappingBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
-        extern Microsoft::WRL::ComPtr<ID3D12Resource> g_bvh_topLevelAccelerationStructure;
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(14, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
 
         trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
@@ -412,7 +457,6 @@ namespace Sponza
         trainCtx.SetBufferUAV(9, m_GateMLPGradientBuffer);
         trainCtx.SetBufferUAV(10, m_GateMLPAdamBuffer);
         trainCtx.SetBufferUAV(11, m_LossBuffer);
-
 
         auto cmdList = trainCtx.GetCommandList();
 
@@ -449,24 +493,23 @@ namespace Sponza
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-
         uint32_t* mappedData = (uint32_t*)m_LossReadbackBuffer.Map();
         if (mappedData)
         {
-            // Statické promìnné pro mìøení èasu a prùmìrování mezi framy
+            // Static variables for measuring time and averaging across frames
             static auto lastRecordTime = std::chrono::high_resolution_clock::now();
             static float accumulatedLoss = 0.0f;
             static uint32_t lossSamples = 0;
 
-            // Spoèítáme loss pro TENTO konkrétní frame
+            // Calculate the loss for THIS specific frame
             float totalLoss = (float)(mappedData[0]) / 1000.0f;
             float frameAverageLoss = totalLoss / (m_BackpropDispatchedGroups * 1024.0f);
 
-            // Pøièteme do naší "èekárny"
+            // Accumulate the loss
             accumulatedLoss += frameAverageLoss;
             lossSamples++;
 
-            // Zkontrolujeme, kolik èasu ubìhlo
+            // Check elapsed time
             auto currentTime = std::chrono::high_resolution_clock::now();
             float elapsedTime = std::chrono::duration<float>(currentTime - lastRecordTime).count();
 
@@ -475,7 +518,7 @@ namespace Sponza
                 m_LossHistory[m_LossHistoryOffset] = accumulatedLoss / (float)lossSamples;
                 m_LossHistoryOffset = (m_LossHistoryOffset + 1) % MAX_LOSS_HISTORY;
 
-                // Resetujeme poèítadla pro další pùlsekundu
+                // Reset counters for the next interval
                 accumulatedLoss = 0.0f;
                 lossSamples = 0;
                 lastRecordTime = currentTime;
@@ -484,7 +527,7 @@ namespace Sponza
             m_LossReadbackBuffer.Unmap();
         }
 
-        // 2. Až TEÏ zadáme GPU pøíkaz, a zkopíruje data z AKTUÁLNÍHO snímku pro pøíštì
+        // NOW we issue the GPU command to copy data from the CURRENT frame for the next readback
         trainCtx.TransitionResource(m_LossBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE);
         trainCtx.GetCommandList()->CopyResource(m_LossReadbackBuffer.GetResource(), m_LossBuffer.GetResource());
 
@@ -567,25 +610,26 @@ namespace Sponza
         }
 
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 9); // END 9
-        // Zkopírujeme všech 10 razítek z Heapu do pamìti CPU!
+
+        // Resolve all 10 timestamps from the Heap to CPU-visible memory!
         cmdList->ResolveQueryData(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, m_GpuTimerReadback.Get(), 0);
     }
 
-    extern NumVar m_SunOrientation;
-    extern NumVar m_SunInclination;
-    extern ExpVar m_SunLightIntensity;
+    // =========================================================================
+    // UI & Profiling
+    // =========================================================================
 
     void Gate::RenderGUI()
     {
-        // --- 1. PØEÈTENÍ GPU ÈASÙ (z minulého framu) ---
+        // --- 1. READ GPU TIMESTAMPS (from previous frame) ---
         uint64_t* timestamps = nullptr;
         if (m_GpuTimerReadback && SUCCEEDED(m_GpuTimerReadback->Map(0, nullptr, (void**)&timestamps)))
         {
             if (m_GpuTimestampFreq > 0)
             {
-                double invFreq = 1000.0 / (double)m_GpuTimestampFreq; // Pøevod na milisekundy
+                double invFreq = 1000.0 / (double)m_GpuTimestampFreq; // Convert to milliseconds
 
-                // Ignorujeme data na startu aplikace (když jsou razítka 0 nebo nesmyslná)
+                // Ignore data at application startup (when stamps are 0 or invalid)
                 if (timestamps[1] > timestamps[0])
                     m_GpuTimeBackprop = m_GpuTimeBackprop * 0.9f + (float)((timestamps[1] - timestamps[0]) * invFreq) * 0.1f;
 
@@ -604,10 +648,9 @@ namespace Sponza
             m_GpuTimerReadback->Unmap(0, nullptr);
         }
 
-        // --- 2. VYKRESLENÍ IMGUI ---
+        // --- 2. RENDER IMGUI ---
         ImGui::Begin("GATE Training Configuration");
 
-        // PØIDÁNO: Výpis èasù
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -626,21 +669,18 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::Text("Environment Lighting");
 
-        // Statické promìnné inicializované na výchozí hodnoty ze Sponzy
+        // Static variables initialized to Sponza defaults
         static float sunOri = -0.5f;
         static float sunInc = 0.75f;
         static float sunInt = 4.0f;
 
-        // Kdykoliv hneš sliderem, hodnota se propíše do hlavního systému Sponzy
-        if (ImGui::SliderFloat("Sun Orientation", &sunOri, -3.14159f, 3.14159f, "%.3f rad")) {
+        // Whenever the slider is moved, the value propagates to the main Sponza system
+        if (ImGui::SliderFloat("Sun Orientation", &sunOri, -3.14159f, 3.14159f, "%.3f rad"))
             m_SunOrientation = sunOri;
-        }
-        if (ImGui::SliderFloat("Sun Inclination", &sunInc, 0.0f, 1.0f, "%.3f")) {
+        if (ImGui::SliderFloat("Sun Inclination", &sunInc, 0.0f, 1.0f, "%.3f"))
             m_SunInclination = sunInc;
-        }
-        if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 16.0f, "%.2f")) {
+        if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 16.0f, "%.2f"))
             m_SunLightIntensity = sunInt;
-        }
         ImGui::Spacing();
 
         ImGui::Separator();
@@ -648,9 +688,9 @@ namespace Sponza
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
         ImGui::SliderInt("Base Resolution (R)", &m_DesiredResolution, 1, 16);
-        if (m_DesiredResolution != (int)m_Resolution) {
+
+        if (m_DesiredResolution != (int)m_Resolution)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Resolution changed! Reset training to apply.");
-        }
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
             ResetTraining();
 
@@ -670,48 +710,20 @@ namespace Sponza
 
         ImGui::Separator();
         ImGui::Spacing();
-		ImGui::Text("Training Loss (MSE)"); // Mean Squared Error
+        ImGui::Text("Training Loss (MSE)"); // Mean Squared Error
+
         float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
         char overlay[32];
         sprintf_s(overlay, "Loss: %.5f", currentLoss);
+
         float maxLoss = *std::max_element(m_LossHistory.begin(), m_LossHistory.end());
         float graphMax = std::max(maxLoss * 1.2f, 0.001f);
         float graphHeight = 120.f;
+
         ImGui::PlotLines("##LossGraph", m_LossHistory.data(), MAX_LOSS_HISTORY, m_LossHistoryOffset, overlay,
             0.0f, graphMax, ImVec2(ImGui::GetContentRegionAvail().x, graphHeight));
         ImGui::Spacing();
 
-
-
-
         ImGui::End();
-    }
-
-    void Gate::ResetTraining()
-    {
-        Graphics::g_CommandManager.IdleGPU();
-        m_TrainingStep = 1;
-
-        m_Resolution = m_DesiredResolution;
-        BuildSpatialIndex();
-        AllocateBuffers();
-
-        std::fill(m_LossHistory.begin(), m_LossHistory.end(), 0.0f);
-        m_LossHistoryOffset = 0;
-    }
-
-    void Gate::Cleanup()
-    {
-        m_GateFeatureBuffer.Destroy();
-        m_GateFeatureGradientBuffer.Destroy();
-        m_GateFeatureAdamBuffer.Destroy();
-        m_GateMLPBuffer.Destroy();
-        m_GateMLPGradientBuffer.Destroy();
-        m_GateMLPAdamBuffer.Destroy();
-        m_GlobalTriangleBuffer.Destroy();
-        m_VertexMaterialMap.Destroy();
-
-        m_UniqueFeatureBuffer.Destroy();
-        m_VertexMappingBuffer.Destroy();
     }
 }

@@ -716,7 +716,7 @@ void D3D12RaytracingMiniEngineSample::Startup()
     FXAA::Enable = false;
     PostEffects::EnableHDR = false;//true;
     PostEffects::EnableAdaptation = false;//true;
-    SSAO::Enable = true;
+    SSAO::Enable = false;
     FXAA::Enable = true;
 
     Renderer::Initialize();

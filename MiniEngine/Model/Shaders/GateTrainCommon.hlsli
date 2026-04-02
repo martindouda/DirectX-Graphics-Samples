@@ -18,14 +18,14 @@
 #define HIDDEN_LAYER 1
 #define OUTPUT_LAYER 2
 
-#define MAX_NEURON_QUARTETS_PER_LAYER 4 // Max 16 neurons / 4
+#define MAX_NEURON_QUARTETS_PER_LAYER 4             // Max 16 neurons / 4
 #define ACTIVATION_QUARTETS_PER_NETWORK (2 + 4 + 1) // 8 inputs(2) + 16 hidden(4) + 4 outputs(1)
 
 #define LEAKY_RELU_SLOPE 0.01f
-#define FLOAT4_PACKING_CONSTANT 16384.0f // Scale for fixed-point atomic addition
+#define FLOAT4_PACKING_CONSTANT 16384.0f            // Scale for fixed-point atomic addition
 
 // =========================================================================
-//   Structs
+//   Structures
 // =========================================================================
 
 struct AdamData
@@ -95,27 +95,27 @@ SamplerState                  LinearSampler      : register(s0);
 // -------------------------------------------------------------------------
 
 // --- SRVs (Read-Only) ---
-StructuredBuffer<GlobalTriangle> GlobalTriangleBuffer  : register(t0);
-ByteAddressBuffer                VertexUVBuffer        : register(t1);
-Texture2D<uint>                  VisibilityBuffer      : register(t2, space0);
-StructuredBuffer<uint>           VertexMappingBuffer   : register(t3); // TotalVertexID -> UniqueVertexID
-StructuredBuffer<GateFeature>    UniqueFeatureBuffer   : register(t4); // Unique features for Backprop
-RaytracingAccelerationStructure  SceneBVH              : register(t5);
+StructuredBuffer<GlobalTriangle>    GlobalTriangleBuffer    : register(t0);
+ByteAddressBuffer                   VertexUVBuffer          : register(t1);
+Texture2D<uint>                     VisibilityBuffer        : register(t2, space0);
+StructuredBuffer<uint>              VertexMappingBuffer     : register(t3); // TotalVertexID -> UniqueVertexID
+StructuredBuffer<GateFeature>       UniqueFeatureBuffer     : register(t4); // Unique features for Backprop
+RaytracingAccelerationStructure     SceneBVH                : register(t5);
 
-SamplerState                     LinearSampler         : register(s0);
-Texture2D<float4>                BindlessTextures[]    : register(t0, space1);
+SamplerState        LinearSampler       : register(s0);
+Texture2D<float4>   BindlessTextures[]  : register(t0, space1);
 
 // --- UAVs (Read/Write) ---
 // Features
-RWStructuredBuffer<GateFeature>  DuplicatedFeatureBuffer : register(u0);
-RWStructuredBuffer<int4>         FeatureGradientBuffer   : register(u1);
-RWStructuredBuffer<AdamData>     FeatureAdamBuffer       : register(u2);
+RWStructuredBuffer<GateFeature> DuplicatedFeatureBuffer : register(u0);
+RWStructuredBuffer<int4>        FeatureGradientBuffer   : register(u1);
+RWStructuredBuffer<AdamData>    FeatureAdamBuffer       : register(u2);
 
 // MLP
-RWStructuredBuffer<float4>       MLPParameterBuffer      : register(u3);
-RWStructuredBuffer<int4>         MLPGradientBuffer       : register(u4);
-RWStructuredBuffer<AdamData>     MLPAdamBuffer           : register(u5);
-RWByteAddressBuffer LossBuffer : register(u6);
+RWStructuredBuffer<float4>      MLPParameterBuffer  : register(u3);
+RWStructuredBuffer<int4>        MLPGradientBuffer   : register(u4);
+RWStructuredBuffer<AdamData>    MLPAdamBuffer       : register(u5);
+RWByteAddressBuffer             LossBuffer          : register(u6);
 #endif
 
 // =========================================================================
@@ -145,6 +145,72 @@ float4 unpackFloat4(int4 x)
 int4 packFloat4(float4 x)
 {
     return int4(x * FLOAT4_PACKING_CONSTANT);
+}
+
+// =========================================================================
+//   Geometry & Grid Helpers
+// =========================================================================
+
+// Generalized analytical conversion of 2D indices to a 1D index
+uint get1DIndex(uint i, uint j, uint R)
+{
+    return i * (R + 1) - i * (i - 1) / 2 + j;
+}
+
+void getMeshColorIndicesAndWeights(float3 barycentrics, uint R,
+                                   out uint i0, out uint j0, out float w0,
+                                   out uint i1, out uint j1, out float w1,
+                                   out uint i2, out uint j2, out float w2)
+{
+    // 1. SAFEGUARD AGAINST NEGATIVE BARYCENTRICS (Prevents GPU crashes)
+    barycentrics = saturate(barycentrics);
+    barycentrics /= (barycentrics.x + barycentrics.y + barycentrics.z);
+
+    float u_prime = barycentrics.x * R;
+    float v_prime = barycentrics.y * R;
+
+    int i = (int) floor(u_prime);
+    if (i >= (int) R)
+        i = R - 1; // Safer boundary
+
+    int j = (int) floor(v_prime);
+    if (i + j >= (int) R)
+        j = R - 1 - i;
+
+    float du = u_prime - i;
+    float dv = v_prime - j;
+
+    if (du + dv <= 1.0f)
+    {
+        i0 = i;
+        j0 = j;
+        w0 = 1.0f - du - dv;
+        i1 = i + 1;
+        j1 = j;
+        w1 = du;
+        i2 = i;
+        j2 = j + 1;
+        w2 = dv;
+    }
+    else
+    {
+        i0 = i + 1;
+        j0 = j + 1;
+        w0 = du + dv - 1.0f;
+        i1 = i + 1;
+        j1 = j;
+        w1 = 1.0f - dv;
+        i2 = i;
+        j2 = j + 1;
+        w2 = 1.0f - du;
+        
+        // 2. SAFEGUARD AGAINST FLOAT INACCURACIES
+        if (i0 + j0 > R)
+        {
+            i0 = i;
+            j0 = j; // Fallback to prevent out-of-bounds access
+        }
+    }
 }
 
 // =========================================================================
@@ -179,6 +245,31 @@ float4 activationFunctionOutput(float4 v)
 float4 activationFunctionOutputDeriv(float4 v)
 {
     return v * (1.0f - v);
+}
+
+// =========================================================================
+//   MLP Forward Layer (Inference / Optimized)
+// =========================================================================
+
+void evalLayer(inout float4 previousActivations[MAX_NEURON_QUARTETS_PER_LAYER], inout float4 currentActivations[MAX_NEURON_QUARTETS_PER_LAYER],
+    uint paramOffset, const uint neuronQuartetCountCurrentLayer, const uint neuronQuartetCountPreviousLayer, const uint layerType)
+{
+    for (uint neuronQuartet = 0; neuronQuartet < neuronQuartetCountCurrentLayer; neuronQuartet++)
+    {
+        float4 neuronValue = 0.0f;
+        
+        for (uint previousNeuronQuartet = 0; previousNeuronQuartet < neuronQuartetCountPreviousLayer; previousNeuronQuartet++)
+        {
+            const float4 prevAct = previousActivations[previousNeuronQuartet];
+            neuronValue.x += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.y += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.z += dot(MLPParameterBuffer[paramOffset++], prevAct);
+            neuronValue.w += dot(MLPParameterBuffer[paramOffset++], prevAct);
+        }
+        
+        const float4 bias = MLPParameterBuffer[paramOffset++];
+        currentActivations[neuronQuartet] = (layerType == HIDDEN_LAYER) ? activationFunction(neuronValue + bias) : activationFunctionOutput(neuronValue + bias);
+    }
 }
 
 #ifndef GATE_INFERENCE
@@ -285,8 +376,8 @@ float4 ApplyAdam(float4 gradient, float4 currentValue, inout AdamData adamData, 
     if (adamData.stepCount > 1024)
         adamData.stepCount = 1024;
     
-    float localBeta1T = pow(adamBeta1, (float)adamData.stepCount);
-    float localBeta2T = pow(adamBeta2, (float)adamData.stepCount);
+    float localBeta1T = pow(adamBeta1, (float) adamData.stepCount);
+    float localBeta2T = pow(adamBeta2, (float) adamData.stepCount);
 
     adamData.mean = lerp(gradient, adamData.mean, adamBeta1);
     adamData.variance = lerp(gradient * gradient, adamData.variance, adamBeta2);
@@ -304,90 +395,3 @@ float4 ApplyAdam(float4 gradient, float4 currentValue, inout AdamData adamData, 
     return -lr * (adamStep + decayStep);
 }
 #endif // !GATE_INFERENCE
-
-// =========================================================================
-//   MLP Forward Layer (Inference / Optimized)
-// =========================================================================
-
-void evalLayer(inout float4 previousActivations[MAX_NEURON_QUARTETS_PER_LAYER], inout float4 currentActivations[MAX_NEURON_QUARTETS_PER_LAYER],
-    uint paramOffset, const uint neuronQuartetCountCurrentLayer, const uint neuronQuartetCountPreviousLayer, const uint layerType)
-{
-    for (uint neuronQuartet = 0; neuronQuartet < neuronQuartetCountCurrentLayer; neuronQuartet++)
-    {
-        float4 neuronValue = 0.0f;
-        
-        for (uint previousNeuronQuartet = 0; previousNeuronQuartet < neuronQuartetCountPreviousLayer; previousNeuronQuartet++)
-        {
-            const float4 prevAct = previousActivations[previousNeuronQuartet];
-            neuronValue.x += dot(MLPParameterBuffer[paramOffset++], prevAct);
-            neuronValue.y += dot(MLPParameterBuffer[paramOffset++], prevAct);
-            neuronValue.z += dot(MLPParameterBuffer[paramOffset++], prevAct);
-            neuronValue.w += dot(MLPParameterBuffer[paramOffset++], prevAct);
-        }
-        
-        const float4 bias = MLPParameterBuffer[paramOffset++];
-        currentActivations[neuronQuartet] = (layerType == HIDDEN_LAYER) ? activationFunction(neuronValue + bias) : currentActivations[neuronQuartet] = activationFunctionOutput(neuronValue + bias);
-    }
-}
-
-// Zobecnìný analytický pøevod 2D indexù na 1D index
-uint get1DIndex(uint i, uint j, uint R)
-{
-    return i * (R + 1) - i * (i - 1) / 2 + j;
-}
-
-void getMeshColorIndicesAndWeights(float3 barycentrics, uint R,
-                                   out uint i0, out uint j0, out float w0,
-                                   out uint i1, out uint j1, out float w1,
-                                   out uint i2, out uint j2, out float w2)
-{
-    // 1. OCHRANA PROTI ZÁPORNÝM BARYCENTRIKÁM (Pøedchází pádu GPU!)
-    barycentrics = saturate(barycentrics);
-    barycentrics /= (barycentrics.x + barycentrics.y + barycentrics.z);
-
-    float u_prime = barycentrics.x * R;
-    float v_prime = barycentrics.y * R;
-
-    int i = (int) floor(u_prime);
-    if (i >= (int) R)
-        i = R - 1; // Bezpeènìjší hranice
-
-    int j = (int) floor(v_prime);
-    if (i + j >= (int) R)
-        j = R - 1 - i;
-
-    float du = u_prime - i;
-    float dv = v_prime - j;
-
-    if (du + dv <= 1.0f)
-    {
-        i0 = i;
-        j0 = j;
-        w0 = 1.0f - du - dv;
-        i1 = i + 1;
-        j1 = j;
-        w1 = du;
-        i2 = i;
-        j2 = j + 1;
-        w2 = dv;
-    }
-    else
-    {
-        i0 = i + 1;
-        j0 = j + 1;
-        w0 = du + dv - 1.0f;
-        i1 = i + 1;
-        j1 = j;
-        w1 = 1.0f - dv;
-        i2 = i;
-        j2 = j + 1;
-        w2 = 1.0f - du;
-        
-        // 2. OCHRANA PROTI FLOAT NEPØESNOSTEM
-        if (i0 + j0 > R)
-        {
-            i0 = i;
-            j0 = j; // Fallback, abychom nesáhli mimo pole
-        }
-    }
-}

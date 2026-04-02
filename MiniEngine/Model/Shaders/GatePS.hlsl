@@ -3,6 +3,10 @@
 #define GATE_INFERENCE
 #include "GateTrainCommon.hlsli"
 
+// =========================================================================
+//  Constant Buffers & Structures
+// =========================================================================
+
 cbuffer MeshConstants : register(b1) 
 { 
     uint globalTriangleOffset; 
@@ -18,14 +22,17 @@ struct VSOutput
 {
     float4 Position : SV_POSITION; 
     float3 Normal   : NORMAL;
-    float2 UV       : TEXCOORD0; // Opìt, ujisti se, že VS posílá UV
+    float2 UV       : TEXCOORD0; // Ensure the Vertex Shader outputs UVs
 };
+
+// =========================================================================
+//  PIXEL SHADER: Forward Inference & Lighting
+// =========================================================================
 
 float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
 {
-    // ==========================================================
-    // 1. INFERENCE NEURONOVÉ SÍTÌ
-    // ==========================================================
+    // --- 1. NEURAL NETWORK INFERENCE ---
+    
     uint globalTriID = primitiveID + globalTriangleOffset;
     uint baseIndex = globalTriID * pointsPerTri;
 
@@ -42,35 +49,42 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     GateFeature f1 = FeatureBuffer[baseIndex + idx1];
     GateFeature f2 = FeatureBuffer[baseIndex + idx2];
 
+    // Interpolate features using barycentric weights
     float4 interpF0 = weight0 * f0.data[0] + weight1 * f1.data[0] + weight2 * f2.data[0];
     float4 interpF1 = weight0 * f0.data[1] + weight1 * f1.data[1] + weight2 * f2.data[1];
 
     float4 activationsA[MAX_NEURON_QUARTETS_PER_LAYER];
     float4 activationsB[MAX_NEURON_QUARTETS_PER_LAYER];
-    activationsA[0] = interpF0; activationsA[1] = interpF1; activationsA[2] = 0.0f; activationsA[3] = 0.0f;
+    
+    // Load input layer
+    activationsA[0] = interpF0; 
+    activationsA[1] = interpF1; 
+    activationsA[2] = 0.0f; 
+    activationsA[3] = 0.0f;
 
-    evalLayer(activationsA, activationsB, 0, 4, 2, HIDDEN_LAYER);
+    // Evaluate Network (Hidden -> Output)
+    evalLayer(activationsA, activationsB, 0,  4, 2, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, 36, 1, 4, OUTPUT_LAYER);
 
-    float shadowMask = lerp(0.1f, 1.0f, activationsA[0].x); 
+    // Extract the shadow mask from the network's output activation
+    float shadowMask = lerp(0.0f, 1.0f, activationsA[0].x); 
     
-    // ==========================================================
-    // 2. TEXTURA A JEDNODUCHÉ NASVÍCENÍ
-    // ==========================================================
+    // --- 2. TEXTURING AND SIMPLE LIGHTING ---
+    
     float4 albedo = BindlessTextures[materialIdx * 6].Sample(LinearSampler, input.UV);
     
-    // Normalizace vektorù pro jistotu
+    // Normalize vectors to ensure correct dot product calculation
     float3 N = normalize(input.Normal);
     float3 L = normalize(sunDirection);
     
-    // Skalární souèin: èím víc je normála pøiklonìna ke slunci, tím je hodnota blíž 1.0
-    // saturate() oøízne záporné hodnoty na 0 (když slunce svítí zezadu)
+    // Calculate Lambertian reflectance
+    // saturate() clamps negative values to 0 (when the sun is behind the surface)
     float NdotL = saturate(dot(N, L));
     
-    // Pøímé svìtlo (Slunce * Úhel dopadu * Stín ze sítì)
+    // Direct lighting contribution (Albedo * Lambert * Sun Intensity * Neural Shadow Mask)
     float3 directLight = albedo.rgb * NdotL * sunIntensity * shadowMask;
     
-    // Ambientní svìtlo (aby odvrácené strany a stíny nebyly absolutnì èerné)
+    // Ambient lighting (prevents shadowed or back-facing areas from being completely pitch black)
     float3 ambientLight = albedo.rgb * 0.1f;
     
     return float4(directLight + ambientLight, albedo.a);

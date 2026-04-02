@@ -11,21 +11,26 @@
 #include "Camera.h"
 #include "ModelH3D.h"
 
+#include <vector>
+#include <cstdint>
+
 namespace Sponza
 {
-    // --- Spatial hashing ---
+    // --- Spatial Hashing ---
     struct Int3
     {
         int32_t x, y, z;
 
-        bool operator==(const Int3& other) const {
+        bool operator==(const Int3& other) const
+        {
             return x == other.x && y == other.y && z == other.z;
         }
     };
 
     struct Int3Hash
     {
-        std::size_t operator()(const Int3& k) const {
+        std::size_t operator()(const Int3& k) const
+        {
             // Simple spatial hash
             return ((k.x * 73856093) ^ (k.y * 19349663) ^ (k.z * 83492791));
         }
@@ -37,29 +42,32 @@ namespace Sponza
         Gate();
         ~Gate();
 
-        // --- Main API ---
+        // --- Lifecycle ---
         void Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
+        void Cleanup();
+
+        // --- Execution ---
         void Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection);
         void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
             const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer,
             Math::Vector3 sunDirection, float sunIntensity);
-
         void RenderGUI();
         void ResetTraining();
-        void Cleanup();
 
+        // --- Accessors ---
         inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
         inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
+
         inline void SetIsTrainingPaused(bool isTrainingPaused) { m_IsTrainingPaused = isTrainingPaused; }
         inline bool GetIsTrainingPaused() const { return m_IsTrainingPaused; }
 
     private:
-        // --- Init helpers ---
+        // --- Initialization Helpers ---
         void BuildSpatialIndex();
         void AllocateBuffers();
         void InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
 
-        // --- GPU data structures ---
+        // --- GPU Data Structures ---
         struct GlobalTriangle
         {
             uint32_t i0, i1, i2;
@@ -79,86 +87,88 @@ namespace Sponza
             uint32_t pad[3];
         };
 
-        const ModelH3D* m_Model;
+        // --- Core State ---
+        const ModelH3D* m_Model = nullptr;
 
-        // --- Geometry ---
+        // --- Geometry Statistics ---
         uint32_t m_TotalVertices = 0;
         uint32_t m_TotalTriangles = 0;
         uint32_t m_UniqueSpatialVertexCount = 0;
 
-        // Geometry buffers
-        StructuredBuffer m_GlobalTriangleBuffer;
-        StructuredBuffer m_VertexMaterialMap;
+        // --- Hyperparameters & Training Configuration ---
+        bool     m_IsTrainingPaused = true;
+        uint32_t m_TrainingStep = 1;
+        uint32_t m_Resolution = 8;
+        int      m_DesiredResolution = 4;        // For UI
+        uint32_t m_PointsPerTri = 0;
 
-        // Feature buffers (Cache-coherency architecture)
-        StructuredBuffer m_GateFeatureBuffer;           // Duplicated   (for fast read during Inference/Backprop)
-        StructuredBuffer m_UniqueFeatureBuffer;         // Unique       (for write by Adam optimizer)
-        StructuredBuffer m_VertexMappingBuffer;         // N:M mapping  (for copying data to duplicates)
+        int      m_BackpropDispatchedGroups = 1024; // * 1024 triangles per step
+        float    m_GlobalLearningRate = 0.1f;
+        float    m_LearningRateRatio = 0.5f;
+        float    m_AdamEpsilon = 1e-8f;
+        float    m_AdamBeta1 = 0.9f;
+        float    m_AdamBeta2 = 0.999f;
+        float    m_WeightDecay = 0.01f;
+        float    m_ScreenSpaceRatio = 0.85f;
+
+        // --- GPU Resources: Geometry & Features ---
+        StructuredBuffer  m_GlobalTriangleBuffer;
+        StructuredBuffer  m_VertexMaterialMap;
+
+        // Cache-coherency architecture buffers
+        StructuredBuffer  m_GateFeatureBuffer;          // Duplicated  (for fast read during Inference/Backprop)
+        StructuredBuffer  m_UniqueFeatureBuffer;        // Unique      (for write by Adam optimizer)
+        StructuredBuffer  m_VertexMappingBuffer;        // N:M mapping (for copying data to duplicates)
 
         ByteAddressBuffer m_GateFeatureGradientBuffer;
         ByteAddressBuffer m_GateFeatureAdamBuffer;
 
-        // MLP buffers
+        // --- GPU Resources: MLP ---
         ByteAddressBuffer m_GateMLPBuffer;
         ByteAddressBuffer m_GateMLPGradientBuffer;
         ByteAddressBuffer m_GateMLPAdamBuffer;
 
-        // --- PSOs a Root Signatures ---
-        // Inference
-        RootSignature m_GateRootSig;
-        GraphicsPSO m_GatePSO;
-        ColorBuffer m_GateColorBuffer;
+        // --- Root Signatures & Pipeline States ---
 
-        // Training
-        RootSignature m_GateTrainRootSig;
-        ComputePSO m_GateBackpropPSO;
-        ComputePSO m_GateOptMLPPSO;
-        ComputePSO m_GateOptFeatPSO;
-        ComputePSO m_GateBroadcastPSO;
+        // Inference Pipeline
+        RootSignature     m_GateRootSig;
+        GraphicsPSO       m_GatePSO;
+        ColorBuffer       m_GateColorBuffer;
 
-        // Vis
-        RootSignature m_VisRootSig;
-        ComputePSO m_VisPSO;
-        ColorBuffer m_VisColorBuffer;
+        // Training Pipeline
+        RootSignature     m_GateTrainRootSig;
+        ComputePSO        m_GateBackpropPSO;
+        ComputePSO        m_GateOptMLPPSO;
+        ComputePSO        m_GateOptFeatPSO;
+        ComputePSO        m_GateBroadcastPSO;
 
-        RootSignature m_EncodeColorRootSig;
-        ComputePSO m_EncodeColorPSO;
+        // Visualization Pipeline
+        RootSignature     m_VisRootSig;
+        ComputePSO        m_VisPSO;
+        ColorBuffer       m_VisColorBuffer;
 
-		// --- Hyperparameters and state ---
-        uint32_t m_Resolution = 4;
-        int m_DesiredResolution = 4; // For UI
-        uint32_t m_PointsPerTri;
+        // Encoding Pipeline
+        RootSignature     m_EncodeColorRootSig;
+        ComputePSO        m_EncodeColorPSO;
 
-        uint32_t m_TrainingStep = 1;
-        bool m_IsTrainingPaused = true;
+        // --- Training Metrics (Loss Tracking) ---
+        static const uint32_t MAX_LOSS_HISTORY = 100;
+        std::vector<float>    m_LossHistory;
+        uint32_t              m_LossHistoryOffset = 0;
 
-        int m_BackpropDispatchedGroups = 1024; // * 1024 trojúhelníkù na krok
-        float m_GlobalLearningRate = 0.1f;
-        float m_LearningRateRatio = 0.5f;
-        float m_AdamEpsilon = 1e-8f;
-        float m_AdamBeta1 = 0.9f;
-        float m_AdamBeta2 = 0.999f;
-        float m_WeightDecay = 0.01f;
-        float m_ScreenSpaceRatio = 0.85f;
+        ByteAddressBuffer     m_LossBuffer;         // GPU writes here the loss value after each training step
+        ReadbackBuffer        m_LossReadbackBuffer; // CPU reads the loss value from here
 
-        // Pøidej nìkam k promìnným tøídy Gate:
-        std::vector<float> m_LossHistory;
-        uint32_t m_LossHistoryOffset = 0;
-        const uint32_t MAX_LOSS_HISTORY = 100;
-
-		ByteAddressBuffer m_LossBuffer;        // GPU writes here the loss value after each training step
-		ReadbackBuffer m_LossReadbackBuffer;   // CPU reads the loss value from here
-
+        // --- Hardware Timers & GUI Profiling Variables ---
         Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_GpuTimerHeap;
-        Microsoft::WRL::ComPtr<ID3D12Resource> m_GpuTimerReadback;
+        Microsoft::WRL::ComPtr<ID3D12Resource>  m_GpuTimerReadback;
         uint64_t m_GpuTimestampFreq = 0;
 
-        // --- Promìnné pro ImGui ---
+        float m_CpuTimeBuildSpatialIndex = 0.0f;
         float m_GpuTimeBackprop = 0.0f;
         float m_GpuTimeOptMLP = 0.0f;
         float m_GpuTimeOptFeat = 0.0f;
         float m_GpuTimeBroadcast = 0.0f;
         float m_GpuTimeRender = 0.0f;
-        float m_CpuTimeBuildSpatialIndex = 0.0f;
     };
 }
