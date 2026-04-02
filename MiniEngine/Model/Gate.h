@@ -41,7 +41,8 @@ namespace Sponza
         void Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
         void Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection);
         void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
-            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer);
+            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer,
+            Math::Vector3 sunDirection, float sunIntensity);
 
         void RenderGUI();
         void ResetTraining();
@@ -137,7 +138,7 @@ namespace Sponza
         float m_AdamBeta1 = 0.9f;
         float m_AdamBeta2 = 0.999f;
         float m_WeightDecay = 0.01f;
-        float m_ScreenSpaceRatio = 0.95f;
+        float m_ScreenSpaceRatio = 0.85f;
 
         // Pøidej nìkam k promìnným tøídy Gate:
         std::vector<float> m_LossHistory;
@@ -146,5 +147,17 @@ namespace Sponza
 
 		ByteAddressBuffer m_LossBuffer;        // GPU writes here the loss value after each training step
 		ReadbackBuffer m_LossReadbackBuffer;   // CPU reads the loss value from here
+
+        Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_GpuTimerHeap;
+        Microsoft::WRL::ComPtr<ID3D12Resource> m_GpuTimerReadback;
+        uint64_t m_GpuTimestampFreq = 0;
+
+        // --- Promìnné pro ImGui ---
+        float m_GpuTimeBackprop = 0.0f;
+        float m_GpuTimeOptMLP = 0.0f;
+        float m_GpuTimeOptFeat = 0.0f;
+        float m_GpuTimeBroadcast = 0.0f;
+        float m_GpuTimeRender = 0.0f;
+        float m_CpuTimeBuildSpatialIndex = 0.0f;
     };
 }

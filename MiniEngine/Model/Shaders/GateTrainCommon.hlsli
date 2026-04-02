@@ -240,7 +240,7 @@ void evalLayerActivations(inout float4 activations[ACTIVATION_QUARTETS_PER_NETWO
     }
 }
 
-void backpropLayer(const float3 target, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], inout float4 errors[ACTIVATION_QUARTETS_PER_NETWORK], uint prevLayerQuartets, uint currLayerQuartets, uint prevOffset, uint currOffset, uint weightIndex, uint layerType)
+void backpropLayer(const float4 target, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], inout float4 errors[ACTIVATION_QUARTETS_PER_NETWORK], uint prevLayerQuartets, uint currLayerQuartets, uint prevOffset, uint currOffset, uint weightIndex, uint layerType)
 {
     // Initialize the previous layer's error to 0 so we can accumulate the transposed weights into it
     for (uint pq = prevOffset; pq < prevOffset + prevLayerQuartets; pq++)
@@ -249,7 +249,7 @@ void backpropLayer(const float3 target, inout float4 activations[ACTIVATION_QUAR
     for (uint q = currOffset; q < currOffset + currLayerQuartets; q++)
     {
         const float4 act = activations[q];
-        float4 dCost_O = (layerType == OUTPUT_LAYER) ? (act - float4(target, 0.0f)) : errors[q];
+        float4 dCost_O = (layerType == OUTPUT_LAYER) ? (act - target) : errors[q];
         const float4 dCost_Z = dCost_O * ((layerType == HIDDEN_LAYER) ? activationFunctionDeriv(act) : activationFunctionOutputDeriv(act));
         
         // Weights Gradient & Error Backprop

@@ -6,6 +6,8 @@
 #include <DirectXMath.h>
 #include <chrono>
 #include <algorithm>
+#include <ppl.h>
+#include <numeric>
 
 #include "Gate.h"
 #include "Renderer.h"
@@ -47,32 +49,54 @@ namespace Sponza
         BuildSpatialIndex();
         AllocateBuffers();
         InitializePSOs(colorFormat, depthFormat);
+
+        // --- Inicializace HW GPU Timerù ---
+        D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
+        queryHeapDesc.Count = 10; // Potøebujeme 10 razítek
+        queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        Graphics::g_Device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(&m_GpuTimerHeap));
+
+        auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
+        auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(10 * sizeof(uint64_t));
+        Graphics::g_Device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_GpuTimerReadback));
+
+        // Zjistíme frekvenci èipu (tiky za sekundu), abychom to mohli pøevést na milisekundy
+        Graphics::g_CommandManager.GetGraphicsQueue().GetCommandQueue()->GetTimestampFrequency(&m_GpuTimestampFreq);
     }
 
     void Gate::BuildSpatialIndex()
     {
+        auto tStart = std::chrono::high_resolution_clock::now();
+
         uint32_t vertexStride = m_Model->GetVertexStride();
         m_TotalVertices = m_Model->GetVertexBuffer().SizeInBytes / vertexStride;
 
+        // 1. Pøedpoèítání offsetù trojúhelníkù pro každý mesh, abychom mohli bìžet paralelnì
+        uint32_t numMeshes = m_Model->GetMeshCount();
+        std::vector<uint32_t> meshTriOffsets(numMeshes);
         m_TotalTriangles = 0;
-        for (uint32_t i = 0; i < m_Model->GetMeshCount(); ++i)
-            m_TotalTriangles += m_Model->GetMesh(i).indexCount / 3;
 
-        // 1. Spoèítáme body na trojúhelník podle aktuálního m_Resolution
+        for (uint32_t i = 0; i < numMeshes; ++i)
+        {
+            meshTriOffsets[i] = m_TotalTriangles;
+            m_TotalTriangles += m_Model->GetMesh(i).indexCount / 3;
+        }
+
         m_PointsPerTri = (m_Resolution + 1) * (m_Resolution + 2) / 2;
         uint32_t totalMeshColorPoints = m_TotalTriangles * m_PointsPerTri;
 
-        std::unordered_map<Int3, uint32_t, Int3Hash> spatialHashMap;
         std::vector<uint32_t> duplicateToUniqueMap(totalMeshColorPoints);
         std::vector<GlobalTriangle> globalTris(m_TotalTriangles);
 
-        m_UniqueSpatialVertexCount = 0;
+        // Nové ploché pole pro všechny vygenerované pozice
+        std::vector<Int3> allQuantizedPositions(totalMeshColorPoints);
 
         const float QUANTIZATION_FACTOR = 10000.0f;
         const unsigned char* rawVertexData = m_Model->GetVertexData();
         const unsigned char* rawIndexData = m_Model->GetIndexData();
 
-        // 2. DYNAMICKÉ GENEROVÁNÍ BARYCENTRIK PRO JAKÉKOLIV R
+        // Dynamické generování barycentrik
         std::vector<DirectX::XMFLOAT3> bary(m_PointsPerTri);
         uint32_t idx = 0;
         for (uint32_t i = 0; i <= m_Resolution; ++i) {
@@ -85,64 +109,101 @@ namespace Sponza
             }
         }
 
-        uint32_t triOffset = 0;
-
-        for (uint32_t meshIndex = 0; meshIndex < m_Model->GetMeshCount(); ++meshIndex)
-        {
-            const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
-            uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
-            const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
-
-            for (uint32_t i = 0; i < mesh.indexCount; i += 3)
+        // =========================================================================
+        // FÁZE 1: Paralelní generování bodù pøes všechny meshe (PPL)
+        // =========================================================================
+        concurrency::parallel_for(uint32_t(0), numMeshes, [&](uint32_t meshIndex)
             {
-                uint32_t i0 = cpuIndexData[i + 0] + baseVertex;
-                uint32_t i1 = cpuIndexData[i + 1] + baseVertex;
-                uint32_t i2 = cpuIndexData[i + 2] + baseVertex;
+                const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
+                uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
+                const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
 
-                // PØIDÁNO: Uložení dat pro UV souøadnice a textury
-                globalTris[triOffset].i0 = i0;
-                globalTris[triOffset].i1 = i1;
-                globalTris[triOffset].i2 = i2;
-                globalTris[triOffset].materialIdx = mesh.materialIndex;
+                uint32_t localTriOffset = meshTriOffsets[meshIndex];
 
-                DirectX::XMFLOAT3* p0 = (DirectX::XMFLOAT3*)(rawVertexData + (i0 * vertexStride));
-                DirectX::XMFLOAT3* p1 = (DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride));
-                DirectX::XMFLOAT3* p2 = (DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride));
-
-                for (uint32_t pt = 0; pt < m_PointsPerTri; ++pt)
+                for (uint32_t i = 0; i < mesh.indexCount; i += 3)
                 {
-                    DirectX::XMFLOAT3 pos;
-                    pos.x = bary[pt].x * p0->x + bary[pt].y * p1->x + bary[pt].z * p2->x;
-                    pos.y = bary[pt].x * p0->y + bary[pt].y * p1->y + bary[pt].z * p2->y;
-                    pos.z = bary[pt].x * p0->z + bary[pt].y * p1->z + bary[pt].z * p2->z;
+                    uint32_t i0 = cpuIndexData[i + 0] + baseVertex;
+                    uint32_t i1 = cpuIndexData[i + 1] + baseVertex;
+                    uint32_t i2 = cpuIndexData[i + 2] + baseVertex;
 
-                    Int3 qPos;
-                    qPos.x = static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR));
-                    qPos.y = static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR));
-                    qPos.z = static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR));
+                    globalTris[localTriOffset].i0 = i0;
+                    globalTris[localTriOffset].i1 = i1;
+                    globalTris[localTriOffset].i2 = i2;
+                    globalTris[localTriOffset].materialIdx = mesh.materialIndex;
 
-                    auto it = spatialHashMap.find(qPos);
-                    uint32_t uniqueID;
-                    if (it != spatialHashMap.end()) {
-                        uniqueID = it->second;
+                    DirectX::XMFLOAT3* p0 = (DirectX::XMFLOAT3*)(rawVertexData + (i0 * vertexStride));
+                    DirectX::XMFLOAT3* p1 = (DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride));
+                    DirectX::XMFLOAT3* p2 = (DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride));
+
+                    for (uint32_t pt = 0; pt < m_PointsPerTri; ++pt)
+                    {
+                        DirectX::XMFLOAT3 pos;
+                        pos.x = bary[pt].x * p0->x + bary[pt].y * p1->x + bary[pt].z * p2->x;
+                        pos.y = bary[pt].x * p0->y + bary[pt].y * p1->y + bary[pt].z * p2->y;
+                        pos.z = bary[pt].x * p0->z + bary[pt].y * p1->z + bary[pt].z * p2->z;
+
+                        Int3 qPos;
+                        qPos.x = static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR));
+                        qPos.y = static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR));
+                        qPos.z = static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR));
+
+                        // Bezpeèný paralelní zápis bez zamykání
+                        uint32_t globalPointIndex = localTriOffset * m_PointsPerTri + pt;
+                        allQuantizedPositions[globalPointIndex] = qPos;
                     }
-                    else {
-                        uniqueID = m_UniqueSpatialVertexCount;
-                        spatialHashMap[qPos] = uniqueID;
-                        m_UniqueSpatialVertexCount++;
-                    }
-
-                    uint32_t globalPointIndex = triOffset * m_PointsPerTri + pt;
-                    duplicateToUniqueMap[globalPointIndex] = uniqueID;
+                    localTriOffset++;
                 }
-                triOffset++;
+            });
+
+        // =========================================================================
+        // FÁZE 2: Paralelní seøazení indexù podle 3D pozice (PPL)
+        // =========================================================================
+        std::vector<uint32_t> sortIndices(totalMeshColorPoints);
+        std::iota(sortIndices.begin(), sortIndices.end(), 0);
+
+        // Komparátor porovná dvì kvantizované pozice a seøadí pole indexù
+        concurrency::parallel_sort(sortIndices.begin(), sortIndices.end(), [&](uint32_t a, uint32_t b) {
+            const Int3& posA = allQuantizedPositions[a];
+            const Int3& posB = allQuantizedPositions[b];
+            if (posA.x != posB.x) return posA.x < posB.x;
+            if (posA.y != posB.y) return posA.y < posB.y;
+            return posA.z < posB.z;
+            });
+
+        // =========================================================================
+        // FÁZE 3: Lineární pøidìlení Unique ID (extrémnì rychlé, cache-friendly)
+        // =========================================================================
+        m_UniqueSpatialVertexCount = 0;
+        if (totalMeshColorPoints > 0)
+        {
+            duplicateToUniqueMap[sortIndices[0]] = 0;
+
+            for (size_t i = 1; i < totalMeshColorPoints; ++i)
+            {
+                uint32_t currIdx = sortIndices[i];
+                uint32_t prevIdx = sortIndices[i - 1];
+
+                const Int3& currPos = allQuantizedPositions[currIdx];
+                const Int3& prevPos = allQuantizedPositions[prevIdx];
+
+                // Pokud se pozice liší od pøedchozí, našli jsme nový unikátní bod
+                if (currPos.x != prevPos.x || currPos.y != prevPos.y || currPos.z != prevPos.z) {
+                    m_UniqueSpatialVertexCount++;
+                }
+
+                duplicateToUniqueMap[currIdx] = m_UniqueSpatialVertexCount;
             }
+            m_UniqueSpatialVertexCount++; // Protože jsme zaèínali od 0
         }
 
+        // =========================================================================
+        // FÁZE 4: Vytvoøení bufferù
+        // =========================================================================
         m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", totalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
-        
-        // PØIDÁNO: Vytvoøení bufferu, aby ho GPU mohlo èíst
         m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
+
+        auto tEnd = std::chrono::high_resolution_clock::now();
+        m_CpuTimeBuildSpatialIndex = std::chrono::duration<float, std::milli>(tEnd - tStart).count();
     }
 
     void Gate::AllocateBuffers()
@@ -193,7 +254,7 @@ namespace Sponza
         m_GateRootSig[0].InitAsConstantBuffer(0); // b0
         m_GateRootSig[1].InitAsBufferSRV(0);      // t0 (FeatureBuffer)
         m_GateRootSig[2].InitAsBufferSRV(1);      // t1 (MLP)
-        m_GateRootSig[3].InitAsConstants(1, 4);   // b1 (Inference Constants)
+        m_GateRootSig[3].InitAsConstants(1, 8);   // b1 (Inference Constants)
         m_GateRootSig[4].InitAsBufferSRV(2);      // t2 (GlobalTriangleBuffer)
         m_GateRootSig[5].InitAsDescriptorTable(1);
         m_GateRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
@@ -309,14 +370,15 @@ namespace Sponza
             uint32_t screenHeight;
             uint32_t meshColorResolution;
             uint32_t pointsPerTri;
-			uint32_t padding0;
-            Math::Vector3 sunDirection;
-			uint32_t padding1;
+            uint32_t padding0;
+            DirectX::XMFLOAT3 sunDirection;
+            uint32_t padding1;
         } cb = {
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
-            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), 
-            m_Resolution, m_PointsPerTri, 0, sunDirection, 0
+            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
+            m_Resolution, m_PointsPerTri, 0,
+            DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()), 0
         };
         trainCtx.SetConstantArray(0, 20, &cb);
 
@@ -341,31 +403,42 @@ namespace Sponza
         trainCtx.SetBufferUAV(10, m_GateMLPAdamBuffer);
         trainCtx.SetBufferUAV(11, m_LossBuffer);
 
+
+        auto cmdList = trainCtx.GetCommandList();
+
         // 1. Backprop
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0); // START 0
         trainCtx.SetPipelineState(m_GateBackpropPSO);
         trainCtx.Dispatch(m_BackpropDispatchedGroups, 1, 1);
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1); // END 1
 
         trainCtx.InsertUAVBarrier(m_GateFeatureGradientBuffer);
         trainCtx.InsertUAVBarrier(m_GateMLPGradientBuffer);
 
         // 2. Optimize MLP
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2); // START 2
         trainCtx.SetPipelineState(m_GateOptMLPPSO);
         trainCtx.Dispatch(1, 1, 1);
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3); // END 3
 
         // 3. Optimize features
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4); // START 4
         trainCtx.SetPipelineState(m_GateOptFeatPSO);
         trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * 2, 1024), 1, 1);
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 5); // END 5
 
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
 
-		// 4. Broadcast features to duplicates
+        // 4. Broadcast
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6); // START 6
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
-
-        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles * m_PointsPerTri, 1024), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles* m_PointsPerTri, 1024), 1, 1);
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7); // END 7
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
 
         uint32_t* mappedData = (uint32_t*)m_LossReadbackBuffer.Map();
         if (mappedData)
@@ -409,7 +482,8 @@ namespace Sponza
     }
 
     void Gate::RenderVisualization(GraphicsContext& gfxContext, const Camera& camera, DepthBuffer& depthBuffer,
-        const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer)
+        const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer,
+        Math::Vector3 sunDirection, float sunIntensity)
     {
         ComputeContext& cptCtx = gfxContext.GetComputeContext();
         cptCtx.SetRootSignature(m_VisRootSig);
@@ -445,6 +519,20 @@ namespace Sponza
         gfxContext.SetBufferSRV(4, m_GlobalTriangleBuffer);
         gfxContext.SetDescriptorTable(5, m_Model->GetSRVs(0));
 
+        struct InferenceConstants
+        {
+            uint32_t globalTriangleOffset;
+            uint32_t meshColorResolution;
+            uint32_t pointsPerTri;
+            uint32_t materialIdx;
+
+            DirectX::XMFLOAT3 sunDirection;
+            float sunIntensity;
+        };
+
+        auto cmdList = gfxContext.GetCommandList();
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 8); // START 8
+
         uint32_t globalTriangleOffset = 0;
         for (uint32_t meshIndex = 0; meshIndex < m_Model->GetMeshCount(); ++meshIndex)
         {
@@ -453,19 +541,72 @@ namespace Sponza
             uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
             uint32_t baseVertex = mesh.vertexDataByteOffset / m_Model->GetVertexStride();
 
-            // Global triangle offset in GatePS to acces the correct features
-            uint32_t inferenceConstants[4] = { globalTriangleOffset, m_Resolution, m_PointsPerTri, mesh.materialIndex };
-            gfxContext.SetConstantArray(3, 4, inferenceConstants);
+            InferenceConstants cb;
+            cb.globalTriangleOffset = globalTriangleOffset;
+            cb.meshColorResolution = m_Resolution;
+            cb.pointsPerTri = m_PointsPerTri;
+            cb.materialIdx = mesh.materialIndex;
+
+            cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
+            cb.sunIntensity = sunIntensity;
+
+            gfxContext.SetConstantArray(3, sizeof(InferenceConstants) / 4, &cb);
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
 
             globalTriangleOffset += (indexCount / 3);
         }
+
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 9); // END 9
+        // Zkopírujeme všech 10 razítek z Heapu do pamìti CPU!
+        cmdList->ResolveQueryData(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, m_GpuTimerReadback.Get(), 0);
     }
 
     void Gate::RenderGUI()
     {
+        // --- 1. PØEÈTENÍ GPU ÈASÙ (z minulého framu) ---
+        uint64_t* timestamps = nullptr;
+        if (m_GpuTimerReadback && SUCCEEDED(m_GpuTimerReadback->Map(0, nullptr, (void**)&timestamps)))
+        {
+            if (m_GpuTimestampFreq > 0)
+            {
+                double invFreq = 1000.0 / (double)m_GpuTimestampFreq; // Pøevod na milisekundy
+
+                // Ignorujeme data na startu aplikace (když jsou razítka 0 nebo nesmyslná)
+                if (timestamps[1] > timestamps[0])
+                    m_GpuTimeBackprop = m_GpuTimeBackprop * 0.9f + (float)((timestamps[1] - timestamps[0]) * invFreq) * 0.1f;
+
+                if (timestamps[3] > timestamps[2])
+                    m_GpuTimeOptMLP = m_GpuTimeOptMLP * 0.9f + (float)((timestamps[3] - timestamps[2]) * invFreq) * 0.1f;
+
+                if (timestamps[5] > timestamps[4])
+                    m_GpuTimeOptFeat = m_GpuTimeOptFeat * 0.9f + (float)((timestamps[5] - timestamps[4]) * invFreq) * 0.1f;
+
+                if (timestamps[7] > timestamps[6])
+                    m_GpuTimeBroadcast = m_GpuTimeBroadcast * 0.9f + (float)((timestamps[7] - timestamps[6]) * invFreq) * 0.1f;
+
+                if (timestamps[9] > timestamps[8])
+                    m_GpuTimeRender = m_GpuTimeRender * 0.9f + (float)((timestamps[9] - timestamps[8]) * invFreq) * 0.1f;
+            }
+            m_GpuTimerReadback->Unmap(0, nullptr);
+        }
+
+        // --- 2. VYKRESLENÍ IMGUI ---
         ImGui::Begin("GATE Training Configuration");
-        
+
+        // PØIDÁNO: Výpis èasù
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::Text("Performance Timings (ms)");
+        ImGui::Text("Build Spatial Index (CPU): %.2f ms", m_CpuTimeBuildSpatialIndex);
+        ImGui::Spacing();
+        ImGui::TextDisabled("--- Real GPU Execution Time ---");
+        ImGui::Text("Backprop:      %.4f ms", m_GpuTimeBackprop);
+        ImGui::Text("Optimize MLP:  %.4f ms", m_GpuTimeOptMLP);
+        ImGui::Text("Optimize Feat: %.4f ms", m_GpuTimeOptFeat);
+        ImGui::Text("Broadcast:     %.4f ms", m_GpuTimeBroadcast);
+        ImGui::Text("Forward Render:%.4f ms", m_GpuTimeRender);
+
         ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);

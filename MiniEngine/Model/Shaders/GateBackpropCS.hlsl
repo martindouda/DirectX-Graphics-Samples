@@ -110,7 +110,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
     bool isShadowed = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
     // --- 3. GROUND TRUTH TARGET S APLIKACÍ STÍNU ---
-    float3 target = isShadowed ? float3(0.1f, 0.1f, 0.1f) : float3(1.0f, 1.0f, 1.0f);
+    
+    float target = isShadowed ? 0.f : 1.f;
+    float4 targetInput = float4(target, 0.f, 0.f, 0.f);
 
     // --- 4. FORWARD PASS SÍTÌ ---
     float4 activations[ACTIVATION_QUARTETS_PER_NETWORK];
@@ -122,11 +124,11 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     // --- 5. BACKWARD PASS SÍTÌ ---
     float4 errors[ACTIVATION_QUARTETS_PER_NETWORK];
-    backpropLayer(target, activations, errors, 4, 1, 2, 6, 36, OUTPUT_LAYER);   // Output -> Hidden
-    backpropLayer(target, activations, errors, 2, 4, 0, 2, 0,  HIDDEN_LAYER);   // Hidden -> Input
+    backpropLayer(targetInput, activations, errors, 4, 1, 2, 6, 36, OUTPUT_LAYER);   // Output -> Hidden
+    backpropLayer(targetInput, activations, errors, 2, 4, 0, 2, 0,  HIDDEN_LAYER);   // Hidden -> Input
     gateEncodingBackprop(gateData, errors);                                     // Distribute to Vertices
 
-    float3 diff = target - activations[6].xyz; // Output vrstva zaèíná na indexu 36
+    float diff = target - activations[6].x; // Output vrstva zaèíná na indexu 36
     float pixelLoss = dot(diff, diff); // MSE
     
     LossBuffer.InterlockedAdd(0, (uint)(pixelLoss * 1000.0f));

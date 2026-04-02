@@ -8,17 +8,24 @@ cbuffer MeshConstants : register(b1)
     uint globalTriangleOffset; 
     uint meshColorResolution;
     uint pointsPerTri;
-    uint materialIdx; // PØIDÁNO
+    uint materialIdx;
+
+    float3 sunDirection;
+    float sunIntensity;
 };
 
 struct VSOutput 
 {
     float4 Position : SV_POSITION; 
+    float3 Normal   : NORMAL;
     float2 UV       : TEXCOORD0; // Opìt, ujisti se, že VS posílá UV
 };
 
 float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
 {
+    // ==========================================================
+    // 1. INFERENCE NEURONOVÉ SÍTÌ
+    // ==========================================================
     uint globalTriID = primitiveID + globalTriangleOffset;
     uint baseIndex = globalTriID * pointsPerTri;
 
@@ -45,12 +52,26 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     evalLayer(activationsA, activationsB, 0, 4, 2, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, 36, 1, 4, OUTPUT_LAYER);
 
-    // 1. Získání masky stínu z MLP (nauèená hodnota 0.1 až 1.0)
-    float3 shadowMask = activationsA[0].xyz; 
+    float shadowMask = lerp(0.1f, 1.0f, activationsA[0].x); 
     
-    // 2. Vzorkování difuzní textury z bindless pole (offset 6 textur per materiál)
+    // ==========================================================
+    // 2. TEXTURA A JEDNODUCHÉ NASVÍCENÍ
+    // ==========================================================
     float4 albedo = BindlessTextures[materialIdx * 6].Sample(LinearSampler, input.UV);
     
-    // 3. Výsledek
-    return float4(albedo.rgb * shadowMask, albedo.a);
+    // Normalizace vektorù pro jistotu
+    float3 N = normalize(input.Normal);
+    float3 L = normalize(sunDirection);
+    
+    // Skalární souèin: èím víc je normála pøiklonìna ke slunci, tím je hodnota blíž 1.0
+    // saturate() oøízne záporné hodnoty na 0 (když slunce svítí zezadu)
+    float NdotL = saturate(dot(N, L));
+    
+    // Pøímé svìtlo (Slunce * Úhel dopadu * Stín ze sítì)
+    float3 directLight = albedo.rgb * NdotL * sunIntensity * shadowMask;
+    
+    // Ambientní svìtlo (aby odvrácené strany a stíny nebyly absolutnì èerné)
+    float3 ambientLight = albedo.rgb * 0.1f;
+    
+    return float4(directLight + ambientLight, albedo.a);
 }
