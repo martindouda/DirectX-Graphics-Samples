@@ -73,7 +73,9 @@ cbuffer RootConstantsCB : register(b0)
     uint screenHeight;
     uint meshColorResolution;
     uint pointsPerTri;
+    uint padding0;
     float3 sunDirection;
+    uint padding1;
 };
 #endif
 
@@ -84,6 +86,8 @@ cbuffer RootConstantsCB : register(b0)
 
 StructuredBuffer<GateFeature> FeatureBuffer      : register(t0);
 StructuredBuffer<float4>      MLPParameterBuffer : register(t1);
+Texture2D<float4>             BindlessTextures[] : register(t0, space1);
+SamplerState                  LinearSampler      : register(s0);
 
 #else
 // -------------------------------------------------------------------------

@@ -275,17 +275,17 @@ void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, cons
 {
     Renderer::UpdateGlobalDescriptors();
 
-    if (renderGateToViewport)
-        m_Gate.Train(gfxContext.GetComputeContext(), m_VisibilityBuffer, m_SunDirection);
-
-    uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
-
     float costheta = cosf(m_SunOrientation);
     float sintheta = sinf(m_SunOrientation);
     float cosphi = cosf(m_SunInclination * 3.14159f * 0.5f);
     float sinphi = sinf(m_SunInclination * 3.14159f * 0.5f);
     m_SunDirection = Normalize(Vector3( costheta * cosphi, sinphi, sintheta * cosphi ));
 
+    if (renderGateToViewport)
+        m_Gate.Train(gfxContext.GetComputeContext(), m_VisibilityBuffer, m_SunDirection);
+
+    uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
+    
     __declspec(align(16)) struct
     {
         Vector3 sunDirection;

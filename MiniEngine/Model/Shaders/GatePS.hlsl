@@ -8,11 +8,13 @@ cbuffer MeshConstants : register(b1)
     uint globalTriangleOffset; 
     uint meshColorResolution;
     uint pointsPerTri;
+    uint materialIdx; // PØIDÁNO
 };
 
 struct VSOutput 
 {
     float4 Position : SV_POSITION; 
+    float2 UV       : TEXCOORD0; // Opìt, ujisti se, že VS posílá UV
 };
 
 float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
@@ -23,15 +25,12 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     uint i0, j0, i1, j1, i2, j2;
     float weight0, weight1, weight2;
     
-    // Získáme lokální møížkové souøadnice
     getMeshColorIndicesAndWeights(barycentrics, meshColorResolution, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
 
-    // Pøevedeme na 1D indexy
     uint idx0 = get1DIndex(i0, j0, meshColorResolution);
     uint idx1 = get1DIndex(i1, j1, meshColorResolution);
     uint idx2 = get1DIndex(i2, j2, meshColorResolution);
 
-    // Naèteme 3 správné vektory a nainterpolujeme je
     GateFeature f0 = FeatureBuffer[baseIndex + idx0];
     GateFeature f1 = FeatureBuffer[baseIndex + idx1];
     GateFeature f2 = FeatureBuffer[baseIndex + idx2];
@@ -46,5 +45,12 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     evalLayer(activationsA, activationsB, 0, 4, 2, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, 36, 1, 4, OUTPUT_LAYER);
 
-    return float4(activationsA[0].xyz, 1.0f);
+    // 1. Získání masky stínu z MLP (nauèená hodnota 0.1 až 1.0)
+    float3 shadowMask = activationsA[0].xyz; 
+    
+    // 2. Vzorkování difuzní textury z bindless pole (offset 6 textur per materiál)
+    float4 albedo = BindlessTextures[materialIdx * 6].Sample(LinearSampler, input.UV);
+    
+    // 3. Výsledek
+    return float4(albedo.rgb * shadowMask, albedo.a);
 }

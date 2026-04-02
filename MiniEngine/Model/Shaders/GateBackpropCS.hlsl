@@ -110,18 +110,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     bool isShadowed = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
     // --- 3. GROUND TRUTH TARGET S APLIKACÍ STÍNU ---
-    float2 uv0 = asfloat(VertexUVBuffer.Load2(origTri.i0 * VertexStride + uvOffset));
-    float2 uv1 = asfloat(VertexUVBuffer.Load2(origTri.i1 * VertexStride + uvOffset));
-    float2 uv2 = asfloat(VertexUVBuffer.Load2(origTri.i2 * VertexStride + uvOffset));
-    float2 interpUV = barycentrics.x * uv0 + barycentrics.y * uv1 + barycentrics.z * uv2;
-    
-    float3 target = BindlessTextures[origTri.materialIdx * 6].SampleLevel(LinearSampler, interpUV, 0).rgb;
-
-    // Pokud je bod ve stínu, vynásobíme target ambientní složkou (napø. 0.1)
-    if (isShadowed) 
-    {
-        target *= 0.1f;
-    }
+    float3 target = isShadowed ? float3(0.1f, 0.1f, 0.1f) : float3(1.0f, 1.0f, 1.0f);
 
     // --- 4. FORWARD PASS SÍTÌ ---
     float4 activations[ACTIVATION_QUARTETS_PER_NETWORK];

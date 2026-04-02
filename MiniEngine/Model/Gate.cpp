@@ -189,12 +189,15 @@ namespace Sponza
     void Gate::InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
         // 1. Setup Inference PSO
-        m_GateRootSig.Reset(5, 0);
-        m_GateRootSig[0].InitAsConstantBuffer(0);
-        m_GateRootSig[1].InitAsBufferSRV(0);
-        m_GateRootSig[2].InitAsBufferSRV(1);
-        m_GateRootSig[3].InitAsConstants(1, 3);
-        m_GateRootSig[4].InitAsBufferSRV(2);
+        m_GateRootSig.Reset(6, 1);
+        m_GateRootSig[0].InitAsConstantBuffer(0); // b0
+        m_GateRootSig[1].InitAsBufferSRV(0);      // t0 (FeatureBuffer)
+        m_GateRootSig[2].InitAsBufferSRV(1);      // t1 (MLP)
+        m_GateRootSig[3].InitAsConstants(1, 4);   // b1 (Inference Constants)
+        m_GateRootSig[4].InitAsBufferSRV(2);      // t2 (GlobalTriangleBuffer)
+        m_GateRootSig[5].InitAsDescriptorTable(1);
+        m_GateRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
+        m_GateRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         D3D12_INPUT_ELEMENT_DESC vertElem[] = {
@@ -218,7 +221,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(15, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 15); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 20); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
 
@@ -306,14 +309,16 @@ namespace Sponza
             uint32_t screenHeight;
             uint32_t meshColorResolution;
             uint32_t pointsPerTri;
+			uint32_t padding0;
             Math::Vector3 sunDirection;
+			uint32_t padding1;
         } cb = {
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), 
-            m_Resolution, m_PointsPerTri, sunDirection
+            m_Resolution, m_PointsPerTri, 0, sunDirection, 0
         };
-        trainCtx.SetConstantArray(0, 18, &cb);
+        trainCtx.SetConstantArray(0, 20, &cb);
 
         // --- BACKPROP SETUP ---
 
@@ -438,6 +443,7 @@ namespace Sponza
         gfxContext.SetViewportAndScissor(viewport, scissor);
 
         gfxContext.SetBufferSRV(4, m_GlobalTriangleBuffer);
+        gfxContext.SetDescriptorTable(5, m_Model->GetSRVs(0));
 
         uint32_t globalTriangleOffset = 0;
         for (uint32_t meshIndex = 0; meshIndex < m_Model->GetMeshCount(); ++meshIndex)
@@ -448,8 +454,8 @@ namespace Sponza
             uint32_t baseVertex = mesh.vertexDataByteOffset / m_Model->GetVertexStride();
 
             // Global triangle offset in GatePS to acces the correct features
-            uint32_t inferenceConstants[3] = { globalTriangleOffset, m_Resolution, m_PointsPerTri };
-            gfxContext.SetConstantArray(3, 3, inferenceConstants);
+            uint32_t inferenceConstants[4] = { globalTriangleOffset, m_Resolution, m_PointsPerTri, mesh.materialIndex };
+            gfxContext.SetConstantArray(3, 4, inferenceConstants);
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
 
             globalTriangleOffset += (indexCount / 3);
