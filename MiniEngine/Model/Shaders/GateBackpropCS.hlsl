@@ -23,7 +23,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
         for (int i = 0; i < 16; ++i)
         {
             uint2 pixelCoord = uint2((uint)(rand(rng) * screenWidth),  (uint)(rand(rng) * screenHeight));
-
             uint rawID = VisibilityBuffer.Load(int3(pixelCoord, 0)).r;
 
             if (rawID == 0) // Zero is sky
@@ -60,7 +59,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
         bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
     }
 
-
     float u1 = rand(rng); float u2 = rand(rng); float sqrt_u1 = sqrt(u1);
     float3 barycentrics = float3(1.0f - sqrt_u1, sqrt_u1 * (1.0f - u2), sqrt_u1 * u2);
 
@@ -82,32 +80,65 @@ void main(uint3 DTid : SV_DispatchThreadID)
     gateData.indices.y = VertexMappingBuffer[baseIndex + idx1];
     gateData.indices.z = VertexMappingBuffer[baseIndex + idx2];
 
-    // For ground truth we use the original triangle to sample the texture, because that's where the UVs are
     GlobalTriangle origTri = GlobalTriangleBuffer[bestTriID];
+    
+    // --- 1. ZÍSKÁNÍ POZICE A NORMÁLY PRO RAY QUERY ---
+    // Pøedpokládáme, že pozice je na offsetu 0 (DXGI_FORMAT_R32G32B32_FLOAT) ve vertex bufferu
+    float3 p0 = asfloat(VertexUVBuffer.Load3(origTri.i0 * VertexStride));
+    float3 p1 = asfloat(VertexUVBuffer.Load3(origTri.i1 * VertexStride));
+    float3 p2 = asfloat(VertexUVBuffer.Load3(origTri.i2 * VertexStride));
+
+    // Svìtová pozice samplu
+    float3 worldPos = barycentrics.x * p0 + barycentrics.y * p1 + barycentrics.z * p2;
+
+    // Rychlý výpoèet geometrické normály pro offset (prevence self-shadowingu)
+    float3 faceNormal = normalize(cross(p1 - p0, p2 - p0));
+
+    // --- 2. INLINE RAY TRACING (SHADOW QUERY) ---
+    RayDesc ray;
+    // Malý offset ve smìru normály zabrání protnutí vlastního trojúhelníku
+    ray.Origin = worldPos + faceNormal * 0.05f; 
+    ray.Direction = sunDirection; // Musí smìøovat KE slunci
+    ray.TMin = 0.0f;
+    ray.TMax = 10000.0f;
+
+    // Flagy optimalizované èistì pro stíny - hledáme POUZE jestli nìco pøekáží (neprùhledného)
+    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+    q.TraceRayInline(SceneBVH, 0, 0xFF, ray);
+    q.Proceed();
+
+    bool isShadowed = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
+
+    // --- 3. GROUND TRUTH TARGET S APLIKACÍ STÍNU ---
     float2 uv0 = asfloat(VertexUVBuffer.Load2(origTri.i0 * VertexStride + uvOffset));
     float2 uv1 = asfloat(VertexUVBuffer.Load2(origTri.i1 * VertexStride + uvOffset));
     float2 uv2 = asfloat(VertexUVBuffer.Load2(origTri.i2 * VertexStride + uvOffset));
-    // Použijeme pùvodní globální 'barycentrics', nikoliv lokální 'gateData.barycentrics'!
     float2 interpUV = barycentrics.x * uv0 + barycentrics.y * uv1 + barycentrics.z * uv2;
+    
     float3 target = BindlessTextures[origTri.materialIdx * 6].SampleLevel(LinearSampler, interpUV, 0).rgb;
 
-    // Forward pass
+    // Pokud je bod ve stínu, vynásobíme target ambientní složkou (napø. 0.1)
+    if (isShadowed) 
+    {
+        target *= 0.1f;
+    }
+
+    // --- 4. FORWARD PASS SÍTÌ ---
     float4 activations[ACTIVATION_QUARTETS_PER_NETWORK];
     uint activationIndex = 0;
     
-    gateEncoding(gateData, activationIndex, activations);               // Layer 0 (Input)
-    evalLayerActivations(activations, 0,  0, 2, 4, 2, HIDDEN_LAYER);    // Layer 1 (Hidden)
-    evalLayerActivations(activations, 36, 2, 6, 1, 4, OUTPUT_LAYER);    // Layer 2 (Output)
+    gateEncoding(gateData, activationIndex, activations);                // Layer 0 (Input)
+    evalLayerActivations(activations, 0,  0, 2, 4, 2, HIDDEN_LAYER);     // Layer 1 (Hidden)
+    evalLayerActivations(activations, 36, 2, 6, 1, 4, OUTPUT_LAYER);     // Layer 2 (Output)
 
-    // Backward pass
+    // --- 5. BACKWARD PASS SÍTÌ ---
     float4 errors[ACTIVATION_QUARTETS_PER_NETWORK];
     backpropLayer(target, activations, errors, 4, 1, 2, 6, 36, OUTPUT_LAYER);   // Output -> Hidden
     backpropLayer(target, activations, errors, 2, 4, 0, 2, 0,  HIDDEN_LAYER);   // Hidden -> Input
     gateEncodingBackprop(gateData, errors);                                     // Distribute to Vertices
 
     float3 diff = target - activations[6].xyz; // Output vrstva zaèíná na indexu 36
-    float pixelLoss = dot(diff, diff); // MSE (Mean Squared Error)
+    float pixelLoss = dot(diff, diff); // MSE
     
-    // Trik: vynásobíme milionem a bezpeènì seèteme ze všech vláken
     LossBuffer.InterlockedAdd(0, (uint)(pixelLoss * 1000.0f));
 }

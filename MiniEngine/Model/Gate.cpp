@@ -217,7 +217,7 @@ namespace Sponza
         m_GatePSO.Finalize();
 
         // 2. Setup Training Root Sig & PSOs
-        m_GateTrainRootSig.Reset(14, 1);
+        m_GateTrainRootSig.Reset(15, 1);
         m_GateTrainRootSig[0].InitAsConstants(0, 15); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
@@ -238,6 +238,7 @@ namespace Sponza
 
         m_GateTrainRootSig[12].InitAsBufferSRV(3); // t3: VertexMappingBuffer
         m_GateTrainRootSig[13].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
+        m_GateTrainRootSig[14].InitAsBufferSRV(5); // t5: TLAS for Ray Queries
 
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
@@ -270,7 +271,7 @@ namespace Sponza
         m_VisPSO.Finalize();
     }
 
-    void Gate::Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer)
+    void Gate::Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection)
     {
         if (m_IsTrainingPaused)
             return;
@@ -305,12 +306,14 @@ namespace Sponza
             uint32_t screenHeight;
             uint32_t meshColorResolution;
             uint32_t pointsPerTri;
+            Math::Vector3 sunDirection;
         } cb = {
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
-            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), m_Resolution, m_PointsPerTri
+            (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(), 
+            m_Resolution, m_PointsPerTri, sunDirection
         };
-        trainCtx.SetConstantArray(0, 15, &cb);
+        trainCtx.SetConstantArray(0, 18, &cb);
 
         // --- BACKPROP SETUP ---
 
@@ -318,6 +321,8 @@ namespace Sponza
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_VertexMappingBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
+        extern Microsoft::WRL::ComPtr<ID3D12Resource> g_bvh_topLevelAccelerationStructure;
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(14, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
 
         trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
         trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));

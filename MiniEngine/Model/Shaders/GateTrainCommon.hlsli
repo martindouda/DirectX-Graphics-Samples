@@ -73,6 +73,7 @@ cbuffer RootConstantsCB : register(b0)
     uint screenHeight;
     uint meshColorResolution;
     uint pointsPerTri;
+    float3 sunDirection;
 };
 #endif
 
@@ -95,6 +96,7 @@ ByteAddressBuffer                VertexUVBuffer        : register(t1);
 Texture2D<uint>                  VisibilityBuffer      : register(t2, space0);
 StructuredBuffer<uint>           VertexMappingBuffer   : register(t3); // TotalVertexID -> UniqueVertexID
 StructuredBuffer<GateFeature>    UniqueFeatureBuffer   : register(t4); // Unique features for Backprop
+RaytracingAccelerationStructure  SceneBVH              : register(t5);
 
 SamplerState                     LinearSampler         : register(s0);
 Texture2D<float4>                BindlessTextures[]    : register(t0, space1);
