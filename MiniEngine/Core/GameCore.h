@@ -42,7 +42,7 @@ namespace GameCore
         virtual void RenderUI( class GraphicsContext& ) {};
 
 		// Optional ImGui rendering pass.  This is LDR.  The buffer is already cleared.
-        virtual void RenderImGui( class GraphicsContext& ) {};
+        virtual void RenderImGui() {};
 
         // Override this in applications that use DirectX Raytracing to require a DXR-capable device.
         virtual bool RequiresRaytracingSupport() const { return false; }

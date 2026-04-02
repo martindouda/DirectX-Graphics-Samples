@@ -7,6 +7,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint index = DTid.x; 
     
+    if (index >= uniqueVertexCount * 2)
+        return;
+
     int4 packedGradient = FeatureGradientBuffer[index];
     
     // If the gradient is 0 skip Adam entirely.

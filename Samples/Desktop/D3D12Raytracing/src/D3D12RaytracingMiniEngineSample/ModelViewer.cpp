@@ -194,7 +194,7 @@ public:
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
     virtual void RenderUI(class GraphicsContext&) override;
-    virtual void RenderImGui(GraphicsContext& Context);
+    virtual void RenderImGui();
     virtual void Raytrace(class GraphicsContext&);
 
     virtual bool RequiresRaytracingSupport() const override { return true; }
@@ -1359,7 +1359,7 @@ namespace GameCore
     extern DescriptorHeap g_ImguiDescriptorHeap;
 }
 
-void D3D12RaytracingMiniEngineSample::RenderImGui(GraphicsContext& Context)
+void D3D12RaytracingMiniEngineSample::RenderImGui()
 {
     // Begin the ImGui window
     Sponza::m_Gate.RenderGUI();

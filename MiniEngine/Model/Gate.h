@@ -125,7 +125,8 @@ namespace Sponza
         ComputePSO m_EncodeColorPSO;
 
 		// --- Hyperparameters and state ---
-        uint32_t m_Resolution = 8;
+        uint32_t m_Resolution = 4;
+        int m_DesiredResolution = 4; // For UI
         uint32_t m_PointsPerTri;
 
         uint32_t m_TrainingStep = 1;

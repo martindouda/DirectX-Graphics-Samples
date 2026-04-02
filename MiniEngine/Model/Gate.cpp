@@ -11,6 +11,8 @@
 
 #include "Gate.h"
 #include "Renderer.h"
+#include "EngineTuning.h"
+
 #include "CompiledShaders/GateVS.h"
 #include "CompiledShaders/GatePS.h"
 #include "CompiledShaders/EncodeUVCS.h"
@@ -64,6 +66,14 @@ namespace Sponza
         // Zjistíme frekvenci èipu (tiky za sekundu), abychom to mohli pøevést na milisekundy
         Graphics::g_CommandManager.GetGraphicsQueue().GetCommandQueue()->GetTimestampFrequency(&m_GpuTimestampFreq);
     }
+
+    struct GateMeshInfo
+    {
+        uint32_t basePointIndex;
+        uint32_t startTriIndex;
+        uint32_t resolution;
+        uint32_t pointsPerTri;
+    };
 
     void Gate::BuildSpatialIndex()
     {
@@ -370,14 +380,14 @@ namespace Sponza
             uint32_t screenHeight;
             uint32_t meshColorResolution;
             uint32_t pointsPerTri;
-            uint32_t padding0;
+            uint32_t uniqueVertexCount;
             DirectX::XMFLOAT3 sunDirection;
             uint32_t padding1;
         } cb = {
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
-            m_Resolution, m_PointsPerTri, 0,
+            m_Resolution, m_PointsPerTri, m_UniqueSpatialVertexCount,
             DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()), 0
         };
         trainCtx.SetConstantArray(0, 20, &cb);
@@ -433,7 +443,7 @@ namespace Sponza
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6); // START 6
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
-        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles* m_PointsPerTri, 1024), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles * m_PointsPerTri, 1024), 1, 1);
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7); // END 7
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -561,6 +571,10 @@ namespace Sponza
         cmdList->ResolveQueryData(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, m_GpuTimerReadback.Get(), 0);
     }
 
+    extern NumVar m_SunOrientation;
+    extern NumVar m_SunInclination;
+    extern ExpVar m_SunLightIntensity;
+
     void Gate::RenderGUI()
     {
         // --- 1. PØEÈTENÍ GPU ÈASÙ (z minulého framu) ---
@@ -606,14 +620,41 @@ namespace Sponza
         ImGui::Text("Optimize Feat: %.4f ms", m_GpuTimeOptFeat);
         ImGui::Text("Broadcast:     %.4f ms", m_GpuTimeBroadcast);
         ImGui::Text("Forward Render:%.4f ms", m_GpuTimeRender);
+        ImGui::Spacing();
 
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::Text("Environment Lighting");
+
+        // Statické promìnné inicializované na výchozí hodnoty ze Sponzy
+        static float sunOri = -0.5f;
+        static float sunInc = 0.75f;
+        static float sunInt = 4.0f;
+
+        // Kdykoliv hneš sliderem, hodnota se propíše do hlavního systému Sponzy
+        if (ImGui::SliderFloat("Sun Orientation", &sunOri, -3.14159f, 3.14159f, "%.3f rad")) {
+            m_SunOrientation = sunOri;
+        }
+        if (ImGui::SliderFloat("Sun Inclination", &sunInc, 0.0f, 1.0f, "%.3f")) {
+            m_SunInclination = sunInc;
+        }
+        if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 16.0f, "%.2f")) {
+            m_SunLightIntensity = sunInt;
+        }
+        ImGui::Spacing();
+
+        ImGui::Separator();
         ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
-        if (ImGui::Button("Reset Training", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
+        ImGui::SliderInt("Base Resolution (R)", &m_DesiredResolution, 1, 16);
+        if (m_DesiredResolution != (int)m_Resolution) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Resolution changed! Reset training to apply.");
+        }
+        if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
             ResetTraining();
+
         ImGui::Checkbox("Pause Training", &m_IsTrainingPaused);
-        ImGui::Spacing();
 
         ImGui::Separator();
         ImGui::Spacing();
@@ -640,13 +681,23 @@ namespace Sponza
             0.0f, graphMax, ImVec2(ImGui::GetContentRegionAvail().x, graphHeight));
         ImGui::Spacing();
 
+
+
+
         ImGui::End();
     }
 
     void Gate::ResetTraining()
     {
+        Graphics::g_CommandManager.IdleGPU();
         m_TrainingStep = 1;
+
+        m_Resolution = m_DesiredResolution;
+        BuildSpatialIndex();
         AllocateBuffers();
+
+        std::fill(m_LossHistory.begin(), m_LossHistory.end(), 0.0f);
+        m_LossHistoryOffset = 0;
     }
 
     void Gate::Cleanup()

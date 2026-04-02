@@ -73,7 +73,7 @@ cbuffer RootConstantsCB : register(b0)
     uint screenHeight;
     uint meshColorResolution;
     uint pointsPerTri;
-    uint padding0;
+    uint uniqueVertexCount;
     float3 sunDirection;
     uint padding1;
 };

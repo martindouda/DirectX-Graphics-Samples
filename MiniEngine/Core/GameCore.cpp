@@ -118,7 +118,7 @@ namespace GameCore
         ImGuiContext.SetRenderTarget(g_OverlayBuffer.GetRTV());
         ImGuiContext.SetViewportAndScissor(0, 0, g_OverlayBuffer.GetWidth(), g_OverlayBuffer.GetHeight());
 
-		game.RenderImGui(ImGuiContext);
+		game.RenderImGui();
 		ID3D12DescriptorHeap* imguiHeapPointer = g_ImguiDescriptorHeap.GetHeapPointer();
         ImGuiContext.GetCommandList()->SetDescriptorHeaps(1, &imguiHeapPointer);
         ImGui::Render();
