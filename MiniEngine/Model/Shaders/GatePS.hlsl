@@ -20,14 +20,33 @@ cbuffer MeshConstants : register(b1)
 
 struct VSOutput 
 {
-    float4 Position : SV_POSITION; 
-    float3 Normal   : NORMAL;
-    float2 UV       : TEXCOORD0; // Ensure the Vertex Shader outputs UVs
+    float4 Position  : SV_POSITION; 
+    float2 UV        : TEXCOORD0; // Ensure the Vertex Shader outputs UVs
+    float3 Normal    : NORMAL;
+    float3 Tangent   : TANGENT;
+    float3 Bitangent : BITANGENT;
+    float3 worldPos  : WorldPos;
 };
 
 // =========================================================================
 //  PIXEL SHADER: Forward Inference & Lighting
 // =========================================================================
+
+float3 ComputeNormal(VSOutput input)
+{
+    // 1. Sample and Unpack the Normal Map
+    // (Ensure register t3 is your normal map)
+    float3 mapNormal = BindlessTextures[materialIdx * 6 + 3].Sample(LinearSampler, input.UV).rgb;
+    mapNormal = mapNormal * 2.0 - 1.0;
+
+    // 2. Construct the TBN matrix exactly like your provided Pixel Shader
+    // We normalize the interpolated vectors to ensure the basis is orthonormal
+    float3x3 tbn = float3x3(normalize(input.Tangent), normalize(input.Bitangent), normalize(input.Normal));
+
+    // 3. Transform Tangent Space -> World Space
+    // mul(vector, matrix) in HLSL performs a Row-Vector * Matrix multiplication
+    return normalize(mul(mapNormal, tbn));
+}
 
 float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
 {
@@ -69,22 +88,16 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     // Extract the shadow mask from the network's output activation
     float shadowMask = lerp(0.0f, 1.0f, activationsA[0].x); 
     
-    // --- 2. TEXTURING AND SIMPLE LIGHTING ---
+    // --- 2. TEXTURING & NORMAL MAPPING ---
     
-    float4 albedo = BindlessTextures[materialIdx * 6].Sample(LinearSampler, input.UV);
-    
-    // Normalize vectors to ensure correct dot product calculation
-    float3 N = normalize(input.Normal);
+    // MiniEngine Material Layout: 
+    // [0]=Diffuse, [1]=Specular, [2]=Empty, [3]=Normal
+    float4 albedo = BindlessTextures[materialIdx * 6 + 0].Sample(LinearSampler, input.UV);
+    float3 N = ComputeNormal(input);
     float3 L = normalize(sunDirection);
-    
-    // Calculate Lambertian reflectance
-    // saturate() clamps negative values to 0 (when the sun is behind the surface)
     float NdotL = saturate(dot(N, L));
     
-    // Direct lighting contribution (Albedo * Lambert * Sun Intensity * Neural Shadow Mask)
     float3 directLight = albedo.rgb * NdotL * sunIntensity * shadowMask;
-    
-    // Ambient lighting (prevents shadowed or back-facing areas from being completely pitch black)
     float3 ambientLight = albedo.rgb * 0.1f;
     
     return float4(directLight + ambientLight, albedo.a);

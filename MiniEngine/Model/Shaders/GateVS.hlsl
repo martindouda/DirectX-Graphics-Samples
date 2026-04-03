@@ -14,16 +14,21 @@ cbuffer VSConstants : register(b0)
 
 struct VSInput 
 {
-    float3 position : POSITION;
-    float3 normal   : NORMAL;
-    float2 UV       : TEXCOORD0;
+    float3 position  : POSITION;
+    float2 texcoord : TEXCOORD;
+    float3 normal    : NORMAL;
+    float3 tangent   : TANGENT;
+    float3 bitangent : BITANGENT;
 };
 
 struct VSOutput 
 {
-    float4 position : SV_POSITION;
-    float3 normal   : NORMAL;
-    float2 UV       : TEXCOORD0;
+    float4 position  : SV_POSITION;
+    float2 UV        : TEXCOORD0;
+    float3 normal    : NORMAL;
+    float3 tangent   : TANGENT;
+    float3 bitangent : BITANGENT;
+    float3 worldPos  : WorldPos;
 };
 
 // =========================================================================
@@ -34,12 +39,14 @@ VSOutput main(VSInput input)
 {
     VSOutput output;
     
-    // Transform the vertex position into clip space
     output.position = mul(WVP, float4(input.position, 1.0f));
+    output.worldPos = input.position;
+    output.UV = input.texcoord;
     
-    // Pass-through the normal and UV coordinates to the pixel shader
+    // Pass these through directly (No *2-1, they are FLOAT3)
     output.normal = input.normal;
-    output.UV = input.UV;
+    output.tangent = input.tangent;
+    output.bitangent = input.bitangent;
     
     return output;
 }

@@ -102,7 +102,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     // --- 2. INLINE RAY TRACING (SHADOW QUERY) ---
     RayDesc ray;
-    ray.Origin = worldPos + faceNormal * 0.05f; // Small offset along the normal prevents intersecting the source triangle
+    ray.Origin = worldPos + faceNormal * 0.02f; // Small offset along the normal prevents intersecting the source triangle
     ray.Direction = sunDirection;               // Must point TOWARDS the sun
     ray.TMin = 0.0f;
     ray.TMax = 10000.0f;
