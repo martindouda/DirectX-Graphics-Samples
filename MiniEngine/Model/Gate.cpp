@@ -131,42 +131,109 @@ namespace Sponza
         uint32_t vertexStride = m_Model->GetVertexStride();
         m_TotalVertices = m_Model->GetVertexBuffer().SizeInBytes / vertexStride;
 
-        // 1. Precompute triangle offsets for each mesh to allow parallel processing
         uint32_t numMeshes = m_Model->GetMeshCount();
         std::vector<uint32_t> meshTriOffsets(numMeshes);
         m_TotalTriangles = 0;
 
-        for (uint32_t i = 0; i < numMeshes; ++i)
-        {
-            meshTriOffsets[i] = m_TotalTriangles;
-            m_TotalTriangles += m_Model->GetMesh(i).indexCount / 3;
-        }
-
-        m_PointsPerTri = (m_Resolution + 1) * (m_Resolution + 2) / 2;
-        uint32_t totalMeshColorPoints = m_TotalTriangles * m_PointsPerTri;
-
-        std::vector<uint32_t> duplicateToUniqueMap(totalMeshColorPoints);
-        std::vector<GlobalTriangle> globalTris(m_TotalTriangles);
-
-        // New flat array for all generated positions
-        std::vector<Int3> allQuantizedPositions(totalMeshColorPoints);
-
-        const float QUANTIZATION_FACTOR = 10000.0f;
         const unsigned char* rawVertexData = m_Model->GetVertexData();
         const unsigned char* rawIndexData = m_Model->GetIndexData();
 
-        // Dynamic generation of barycentric coordinates
-        std::vector<DirectX::XMFLOAT3> bary(m_PointsPerTri);
-        uint32_t idx = 0;
-        for (uint32_t i = 0; i <= m_Resolution; ++i)
+        // --- 1A. PASS 1: Calculate areas and find the scene's maximum average area ---
+        std::vector<float> meshAvgAreas(numMeshes, 0.0f);
+        float maxAvgArea = 0.0f;
+
+        for (uint32_t i = 0; i < numMeshes; ++i)
         {
-            for (uint32_t j = 0; j <= m_Resolution - i; ++j)
+            const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
+            uint32_t triCount = mesh.indexCount / 3;
+            float totalArea = 0.0f;
+
+            uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
+            const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
+
+            for (uint32_t t = 0; t < mesh.indexCount; t += 3)
             {
-                uint32_t k = m_Resolution - i - j;
-                bary[idx].x = (float)i / m_Resolution;
-                bary[idx].y = (float)j / m_Resolution;
-                bary[idx].z = (float)k / m_Resolution;
-                idx++;
+                uint32_t i0 = cpuIndexData[t + 0] + baseVertex;
+                uint32_t i1 = cpuIndexData[t + 1] + baseVertex;
+                uint32_t i2 = cpuIndexData[t + 2] + baseVertex;
+
+                DirectX::XMVECTOR p0 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (i0 * vertexStride)));
+                DirectX::XMVECTOR p1 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride)));
+                DirectX::XMVECTOR p2 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride)));
+
+                // Area = 0.5 * length(cross(p1-p0, p2-p0))
+                DirectX::XMVECTOR cross = DirectX::XMVector3Cross(DirectX::XMVectorSubtract(p1, p0), DirectX::XMVectorSubtract(p2, p0));
+                totalArea += DirectX::XMVectorGetX(DirectX::XMVector3Length(cross)) * 0.5f;
+            }
+
+            float avgArea = totalArea / (float)triCount;
+            meshAvgAreas[i] = avgArea;
+
+            if (avgArea > maxAvgArea)
+                maxAvgArea = avgArea;
+        }
+
+        // --- 1B. PASS 2: Assign uniform-density resolutions and prefix sums ---
+        uint32_t currentGlobalPointOffset = 0;
+        std::vector<GlobalTriangle> globalTris;
+
+        // 1. Replace the hardcoded 16 with the dynamically controlled m_Resolution
+        const uint32_t MAX_RES = m_Resolution;
+
+        // Prevent division by zero if the scene is completely empty
+        if (maxAvgArea == 0.0f) maxAvgArea = 1.0f;
+
+        for (uint32_t i = 0; i < numMeshes; ++i)
+        {
+            meshTriOffsets[i] = m_TotalTriangles;
+            const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
+            uint32_t triCount = mesh.indexCount / 3;
+
+            // Calculate R based on constant density formula
+            float areaRatio = meshAvgAreas[i] / maxAvgArea;
+
+            // Map the ratio directly to the new dynamic max resolution
+            uint32_t meshRes = static_cast<uint32_t>(std::round((float)MAX_RES * std::sqrt(areaRatio)));
+
+            // Clamp strictly between 1 and MAX_RES
+            meshRes = std::max(1u, std::min(MAX_RES, meshRes));
+
+            uint32_t meshPtsPerTri = (meshRes + 1) * (meshRes + 2) / 2;
+
+            for (uint32_t t = 0; t < triCount; ++t)
+            {
+                GlobalTriangle gt;
+                gt.resolution = meshRes;
+                gt.pointsPerTri = meshPtsPerTri;
+                gt.pointOffset = currentGlobalPointOffset;
+                gt.materialIdx = mesh.materialIndex;
+                globalTris.push_back(gt);
+
+                currentGlobalPointOffset += meshPtsPerTri;
+            }
+
+            m_TotalTriangles += triCount;
+        }
+
+        m_TotalMeshColorPoints = currentGlobalPointOffset;
+        uint32_t totalMeshColorPoints = m_TotalMeshColorPoints;
+
+        std::vector<uint32_t> duplicateToUniqueMap(totalMeshColorPoints);
+        std::vector<Int3> allQuantizedPositions(totalMeshColorPoints);
+        const float QUANTIZATION_FACTOR = 10000.0f;
+
+        // 2. Pre-generate barycentric layouts for ALL possible resolutions (1 to MAX_RES)
+        std::vector<std::vector<DirectX::XMFLOAT3>> precomputedBarycentrics(MAX_RES + 1);
+        for (uint32_t r = 1; r <= MAX_RES; ++r)
+        {
+            uint32_t pts = (r + 1) * (r + 2) / 2;
+            precomputedBarycentrics[r].resize(pts);
+            uint32_t idx = 0;
+            for (uint32_t i = 0; i <= r; ++i) {
+                for (uint32_t j = 0; j <= r - i; ++j) {
+                    uint32_t k = r - i - j;
+                    precomputedBarycentrics[r][idx++] = { (float)i / r, (float)j / r, (float)k / r };
+                }
             }
         }
 
@@ -176,7 +243,6 @@ namespace Sponza
                 const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
                 uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
                 const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
-
                 uint32_t localTriOffset = meshTriOffsets[meshIndex];
 
                 for (uint32_t i = 0; i < mesh.indexCount; i += 3)
@@ -188,34 +254,38 @@ namespace Sponza
                     globalTris[localTriOffset].i0 = i0;
                     globalTris[localTriOffset].i1 = i1;
                     globalTris[localTriOffset].i2 = i2;
-                    globalTris[localTriOffset].materialIdx = mesh.materialIndex;
+
+                    uint32_t res = globalTris[localTriOffset].resolution;
+                    uint32_t pts = globalTris[localTriOffset].pointsPerTri;
+                    uint32_t pOffset = globalTris[localTriOffset].pointOffset;
 
                     DirectX::XMFLOAT3* p0 = (DirectX::XMFLOAT3*)(rawVertexData + (i0 * vertexStride));
                     DirectX::XMFLOAT3* p1 = (DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride));
                     DirectX::XMFLOAT3* p2 = (DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride));
 
-                    for (uint32_t pt = 0; pt < m_PointsPerTri; ++pt)
+                    const auto& bary = precomputedBarycentrics[res];
+
+                    for (uint32_t pt = 0; pt < pts; ++pt)
                     {
                         DirectX::XMFLOAT3 pos;
                         pos.x = bary[pt].x * p0->x + bary[pt].y * p1->x + bary[pt].z * p2->x;
                         pos.y = bary[pt].x * p0->y + bary[pt].y * p1->y + bary[pt].z * p2->y;
                         pos.z = bary[pt].x * p0->z + bary[pt].y * p1->z + bary[pt].z * p2->z;
 
-                        Int3 qPos;
-                        qPos.x = static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR));
-                        qPos.y = static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR));
-                        qPos.z = static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR));
+                        Int3 qPos = {
+                            static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR)),
+                            static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR)),
+                            static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR))
+                        };
 
-                        // Safe parallel write without locking
-                        uint32_t globalPointIndex = localTriOffset * m_PointsPerTri + pt;
-                        allQuantizedPositions[globalPointIndex] = qPos;
+                        allQuantizedPositions[pOffset + pt] = qPos;
                     }
                     localTriOffset++;
                 }
             });
 
         // --- PHASE 2: Parallel sorting of indices by 3D position (PPL) ---
-        std::vector<uint32_t> sortIndices(totalMeshColorPoints);
+        std::vector<uint32_t> sortIndices(m_TotalMeshColorPoints);
         std::iota(sortIndices.begin(), sortIndices.end(), 0);
 
         // Comparator compares two quantized positions and sorts the index array
@@ -230,11 +300,11 @@ namespace Sponza
 
         // --- PHASE 3: Linear assignment of Unique IDs (cache-friendly) ---
         m_UniqueSpatialVertexCount = 0;
-        if (totalMeshColorPoints > 0)
+        if (m_TotalMeshColorPoints > 0)
         {
             duplicateToUniqueMap[sortIndices[0]] = 0;
 
-            for (size_t i = 1; i < totalMeshColorPoints; ++i)
+            for (size_t i = 1; i < m_TotalMeshColorPoints; ++i)
             {
                 uint32_t currIdx = sortIndices[i];
                 uint32_t prevIdx = sortIndices[i - 1];
@@ -252,7 +322,7 @@ namespace Sponza
         }
 
         // --- PHASE 4: Buffer Creation ---
-        m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", totalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
+        m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", m_TotalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
         m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
 
         auto tEnd = std::chrono::high_resolution_clock::now();
@@ -261,17 +331,14 @@ namespace Sponza
 
     void Gate::AllocateBuffers()
     {
-        // Total number of 'unpacked' points (points per triangle)
-        uint32_t totalMeshColorPoints = m_TotalTriangles * m_PointsPerTri;
-
         // A. DUPLICATED BUFFER (Inference / Reading in Pixel Shader)
-        std::vector<GateFeature> duplicatedFeatures(totalMeshColorPoints);
-        for (uint32_t i = 0; i < totalMeshColorPoints; ++i)
+        std::vector<GateFeature> duplicatedFeatures(m_TotalMeshColorPoints);
+        for (uint32_t i = 0; i < m_TotalMeshColorPoints; ++i)
         {
             duplicatedFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
             duplicatedFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalMeshColorPoints, sizeof(GateFeature), duplicatedFeatures.data());
+        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalMeshColorPoints, sizeof(GateFeature), duplicatedFeatures.data());
 
         // B. UNIQUE BUFFERS (Training / Backprop / Optimization)
         std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
@@ -424,8 +491,8 @@ namespace Sponza
             uint32_t uvOffset;
             uint32_t screenWidth;
             uint32_t screenHeight;
-            uint32_t meshColorResolution;
-            uint32_t pointsPerTri;
+            uint32_t totalMeshColorPoints;
+            uint32_t padding0;
             uint32_t uniqueVertexCount;
             DirectX::XMFLOAT3 sunDirection;
             uint32_t padding1;
@@ -433,7 +500,7 @@ namespace Sponza
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
-            m_Resolution, m_PointsPerTri, m_UniqueSpatialVertexCount,
+            m_TotalMeshColorPoints, 0, m_UniqueSpatialVertexCount,
             DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()), 0
         };
         trainCtx.SetConstantArray(0, 20, &cb);
@@ -487,7 +554,7 @@ namespace Sponza
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6); // START 6
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
-        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalTriangles * m_PointsPerTri, 1024), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalMeshColorPoints, 1024), 1, 1);
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7); // END 7
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -687,7 +754,7 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
-        ImGui::SliderInt("Base Resolution (R)", &m_DesiredResolution, 1, 16);
+        ImGui::SliderInt("Max Resolution Scale", &m_DesiredResolution, 1, 512);
 
         if (m_DesiredResolution != (int)m_Resolution)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Resolution changed! Reset training to apply.");

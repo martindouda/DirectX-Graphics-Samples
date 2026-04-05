@@ -70,8 +70,11 @@ namespace Sponza
         // --- GPU Data Structures ---
         struct GlobalTriangle
         {
-            uint32_t i0, i1, i2;
-            uint32_t materialIdx;
+            uint32_t i0, i1, i2, materialIdx;
+            uint32_t pointOffset;  // The starting index in the flat point arrays
+            uint32_t resolution;   // The specific resolution for this triangle
+            uint32_t pointsPerTri; // The number of points for this triangle
+            uint32_t pad;
         };
 
         struct GateFeature
@@ -93,13 +96,14 @@ namespace Sponza
         // --- Geometry Statistics ---
         uint32_t m_TotalVertices = 0;
         uint32_t m_TotalTriangles = 0;
+        uint32_t m_TotalMeshColorPoints = 0;
         uint32_t m_UniqueSpatialVertexCount = 0;
 
         // --- Hyperparameters & Training Configuration ---
         bool     m_IsTrainingPaused = true;
         uint32_t m_TrainingStep = 1;
         uint32_t m_Resolution = 8;
-        int      m_DesiredResolution = 4;        // For UI
+        int      m_DesiredResolution = 8;        // For UI
         uint32_t m_PointsPerTri = 0;
 
         int      m_BackpropDispatchedGroups = 1024; // * 1024 triangles per step
@@ -110,6 +114,7 @@ namespace Sponza
         float    m_AdamBeta2 = 0.999f;
         float    m_WeightDecay = 0.01f;
         float    m_ScreenSpaceRatio = 0.85f;
+        float    m_AoRadius = 150.0f;
 
         // --- GPU Resources: Geometry & Features ---
         StructuredBuffer  m_GlobalTriangleBuffer;

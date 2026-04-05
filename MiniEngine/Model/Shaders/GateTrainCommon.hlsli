@@ -38,6 +38,10 @@ struct AdamData
 struct GlobalTriangle
 {
     uint i0, i1, i2, materialIdx;
+    uint pointOffset;
+    uint resolution;
+    uint pointsPerTri;
+    uint pad;
 };
 
 struct GateFeature
@@ -71,8 +75,8 @@ cbuffer RootConstantsCB : register(b0)
     uint uvOffset;
     uint screenWidth;
     uint screenHeight;
-    uint meshColorResolution;
-    uint pointsPerTri;
+    uint totalMeshColorPoints;
+    uint padding0;
     uint uniqueVertexCount;
     float3 sunDirection;
     uint padding1;
@@ -84,10 +88,11 @@ cbuffer RootConstantsCB : register(b0)
 //   INFERENCE RESOURCES
 // -------------------------------------------------------------------------
 
-StructuredBuffer<GateFeature> FeatureBuffer      : register(t0);
-StructuredBuffer<float4>      MLPParameterBuffer : register(t1);
-Texture2D<float4>             BindlessTextures[] : register(t0, space1);
-SamplerState                  LinearSampler      : register(s0);
+StructuredBuffer<GateFeature>       FeatureBuffer           : register(t0);
+StructuredBuffer<float4>            MLPParameterBuffer      : register(t1);
+StructuredBuffer<GlobalTriangle>    GlobalTriangleBuffer    : register(t2);
+Texture2D<float4>                   BindlessTextures[]      : register(t0, space1);
+SamplerState                        LinearSampler           : register(s0);
 
 #else
 // -------------------------------------------------------------------------

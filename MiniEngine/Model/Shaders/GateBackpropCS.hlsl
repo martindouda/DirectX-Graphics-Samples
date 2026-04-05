@@ -34,11 +34,14 @@ void main(uint3 DTid : SV_DispatchThreadID)
             if (candidateTriID >= totalTriangles)
                 continue;
 
-            uint baseIdx = candidateTriID * pointsPerTri;
+            // Fetch adaptive resolution data for the candidate triangle
+            GlobalTriangle candidateTri = GlobalTriangleBuffer[candidateTriID];
+            uint baseIdx = candidateTri.pointOffset;
+            uint localPts = candidateTri.pointsPerTri;
             
             // Get a random point within this triangle
-            uint randomPt = min((uint)(rand(rng) * pointsPerTri), pointsPerTri - 1);
-            uint uniquePt = VertexMappingBuffer[baseIdx + randomPt]; 
+            uint randomPt = min((uint)(rand(rng) * localPts), localPts - 1);
+            uint uniquePt = VertexMappingBuffer[baseIdx + randomPt];
 
             // Read the step count from the Adam buffer ONLY for this selected point
             uint stepCount = FeatureAdamBuffer[uniquePt * 2].stepCount;
@@ -68,25 +71,27 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float sqrt_u1 = sqrt(u1);
     float3 barycentrics = float3(1.0f - sqrt_u1, sqrt_u1 * (1.0f - u2), sqrt_u1 * u2);
 
+    GlobalTriangle origTri = GlobalTriangleBuffer[bestTriID];
+    uint baseIndex = origTri.pointOffset;
+    uint localRes = origTri.resolution;
+    uint localPts = origTri.pointsPerTri;
+
     // Get local grid coordinates
     uint i0, j0, i1, j1, i2, j2;
     float weight0, weight1, weight2;
-    getMeshColorIndicesAndWeights(barycentrics, meshColorResolution, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
+    getMeshColorIndicesAndWeights(barycentrics, localRes, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
 
-    uint idx0 = get1DIndex(i0, j0, meshColorResolution);
-    uint idx1 = get1DIndex(i1, j1, meshColorResolution);
-    uint idx2 = get1DIndex(i2, j2, meshColorResolution);
+    uint idx0 = get1DIndex(i0, j0, localRes);
+    uint idx1 = get1DIndex(i1, j1, localRes);
+    uint idx2 = get1DIndex(i2, j2, localRes);
 
-    uint baseIndex = bestTriID * pointsPerTri;
     GateEncodingData gateData;
     gateData.barycentrics = float3(weight0, weight1, weight2);
     
-    // Convert duplicated grid index to unique ID!
+    // Convert duplicated grid index to unique ID
     gateData.indices.x = VertexMappingBuffer[baseIndex + idx0];
     gateData.indices.y = VertexMappingBuffer[baseIndex + idx1];
     gateData.indices.z = VertexMappingBuffer[baseIndex + idx2];
-
-    GlobalTriangle origTri = GlobalTriangleBuffer[bestTriID];
     
     // --- 1. GET POSITION AND NORMAL FOR RAY QUERY ---
     // Assume position is at offset 0 (DXGI_FORMAT_R32G32B32_FLOAT) in the vertex buffer

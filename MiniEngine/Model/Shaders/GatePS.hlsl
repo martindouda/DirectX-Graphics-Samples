@@ -51,18 +51,22 @@ float3 ComputeNormal(VSOutput input)
 float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
 {
     // --- 1. NEURAL NETWORK INFERENCE ---
-    
     uint globalTriID = primitiveID + globalTriangleOffset;
-    uint baseIndex = globalTriID * pointsPerTri;
+    
+    // 1. Fetch properties directly from the Triangle Buffer
+    GlobalTriangle triData = GlobalTriangleBuffer[globalTriID];
+    uint baseIndex = triData.pointOffset;
+    uint localRes = triData.resolution;
 
     uint i0, j0, i1, j1, i2, j2;
     float weight0, weight1, weight2;
     
-    getMeshColorIndicesAndWeights(barycentrics, meshColorResolution, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
+    // Pass localRes instead of meshColorResolution
+    getMeshColorIndicesAndWeights(barycentrics, localRes, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
 
-    uint idx0 = get1DIndex(i0, j0, meshColorResolution);
-    uint idx1 = get1DIndex(i1, j1, meshColorResolution);
-    uint idx2 = get1DIndex(i2, j2, meshColorResolution);
+    uint idx0 = get1DIndex(i0, j0, localRes);
+    uint idx1 = get1DIndex(i1, j1, localRes);
+    uint idx2 = get1DIndex(i2, j2, localRes);
 
     GateFeature f0 = FeatureBuffer[baseIndex + idx0];
     GateFeature f1 = FeatureBuffer[baseIndex + idx1];
