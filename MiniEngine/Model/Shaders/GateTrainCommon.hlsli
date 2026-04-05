@@ -76,7 +76,7 @@ cbuffer RootConstantsCB : register(b0)
     uint screenWidth;
     uint screenHeight;
     uint totalMeshColorPoints;
-    uint padding0;
+    float aoRadius;
     uint uniqueVertexCount;
     float3 sunDirection;
     uint padding1;

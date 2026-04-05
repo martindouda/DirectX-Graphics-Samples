@@ -89,20 +89,22 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     evalLayer(activationsA, activationsB, 0,  4, 2, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, 36, 1, 4, OUTPUT_LAYER);
 
-    // Extract the shadow mask from the network's output activation
-    float shadowMask = lerp(0.0f, 1.0f, activationsA[0].x); 
+    // --- Extract both masks from the network's float4 output ---
+    float shadowMask = saturate(activationsA[0].x); 
+    float aoMask = saturate(activationsA[0].y); 
     
     // --- 2. TEXTURING & NORMAL MAPPING ---
     
-    // MiniEngine Material Layout: 
-    // [0]=Diffuse, [1]=Specular, [2]=Empty, [3]=Normal
     float4 albedo = BindlessTextures[materialIdx * 6 + 0].Sample(LinearSampler, input.UV);
     float3 N = ComputeNormal(input);
     float3 L = normalize(sunDirection);
     float NdotL = saturate(dot(N, L));
     
-    float3 directLight = albedo.rgb * NdotL * sunIntensity * shadowMask;
-    float3 ambientLight = albedo.rgb * 0.1f;
+    // Apply the X channel to direct sunlight
+    float3 directLight = albedo.rgb * NdotL * sunIntensity * shadowMask; 
+    
+    // Apply the Y channel to ambient light
+    float3 ambientLight = albedo.rgb * 0.4f * aoMask; 
     
     return float4(directLight + ambientLight, albedo.a);
 }

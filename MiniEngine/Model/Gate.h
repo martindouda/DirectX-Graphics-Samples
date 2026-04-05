@@ -102,7 +102,7 @@ namespace Sponza
         // --- Hyperparameters & Training Configuration ---
         bool     m_IsTrainingPaused = true;
         uint32_t m_TrainingStep = 1;
-        uint32_t m_Resolution = 8;
+        uint32_t m_Resolution = 256;
         int      m_DesiredResolution = 8;        // For UI
         uint32_t m_PointsPerTri = 0;
 

@@ -2,6 +2,24 @@
 
 #include "GateTrainCommon.hlsli"
 
+// Cosine-weighted hemisphere sampling
+float3 getCosineHemisphereSample(float u1, float u2, float3 normal)
+{
+    float r = sqrt(u1);
+    float theta = 2.0f * 3.14159265f * u2;
+
+    float x = r * cos(theta);
+    float y = r * sin(theta);
+    float z = sqrt(max(0.0f, 1.0f - u1));
+
+    // Create an orthonormal basis around the normal
+    float3 up = abs(normal.z) < 0.999f ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(up, normal));
+    float3 bitangent = cross(normal, tangent);
+
+    return tangent * x + bitangent * y + normal * z;
+}
+
 // =========================================================================
 //  KERNEL: Forward Pass & Gradient Accumulation
 // =========================================================================
@@ -105,23 +123,40 @@ void main(uint3 DTid : SV_DispatchThreadID)
     // Fast calculation of the geometric normal for offset (prevents self-shadowing)
     float3 faceNormal = normalize(cross(p1 - p0, p2 - p0));
 
-    // --- 2. INLINE RAY TRACING (SHADOW QUERY) ---
-    RayDesc ray;
-    ray.Origin = worldPos + faceNormal * 0.02f; // Small offset along the normal prevents intersecting the source triangle
-    ray.Direction = sunDirection;               // Must point TOWARDS the sun
-    ray.TMin = 0.0f;
-    ray.TMax = 10000.0f;
+    // --- 2A. INLINE RAY TRACING (SHADOW QUERY) ---
+    RayDesc shadowRay;
+    shadowRay.Origin = worldPos + faceNormal * 0.05f;
+    shadowRay.Direction = sunDirection;
+    shadowRay.TMin = 0.0f;
+    shadowRay.TMax = 10000.0f;
 
-    // Flags optimized purely for shadows - we ONLY care if an opaque object blocks the ray
-    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-    q.TraceRayInline(SceneBVH, 0, 0xFF, ray);
-    q.Proceed();
+    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qShadow;
+    qShadow.TraceRayInline(SceneBVH, 0, 0xFF, shadowRay);
+    qShadow.Proceed();
+    bool isShadowed = (qShadow.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
-    bool isShadowed = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
+    // --- 2B. INLINE RAY TRACING (AO QUERY) ---
+    float u3 = rand(rng);
+    float u4 = rand(rng);
+    float3 aoDirection = getCosineHemisphereSample(u3, u4, faceNormal);
 
-    // --- 3. GROUND TRUTH TARGET WITH SHADOW APPLICATION ---
-    float target = isShadowed ? 0.f : 1.f;
-    float4 targetInput = float4(target, 0.f, 0.f, 0.f);
+    RayDesc aoRay;
+    aoRay.Origin = worldPos + faceNormal * 0.05f; 
+    aoRay.Direction = aoDirection;                
+    aoRay.TMin = 0.0f;
+    aoRay.TMax = aoRadius;                        
+
+    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qAO;
+    qAO.TraceRayInline(SceneBVH, 0, 0xFF, aoRay);
+    qAO.Proceed();
+    bool isOccluded = (qAO.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
+
+    // --- 3. GROUND TRUTH TARGET (DUAL CHANNEL) ---
+    float targetShadow = isShadowed ? 0.0f : 1.0f;
+    float targetAO = isOccluded ? 0.0f : 1.0f;
+    
+    // Pack both targets into the network's expected output format
+    float4 targetInput = float4(targetShadow, targetAO, 0.0f, 0.0f);
 
     // --- 4. NETWORK FORWARD PASS ---
     float4 activations[ACTIVATION_QUARTETS_PER_NETWORK];
@@ -132,14 +167,16 @@ void main(uint3 DTid : SV_DispatchThreadID)
     evalLayerActivations(activations, 36, 2, 6, 1, 4, OUTPUT_LAYER);     // Layer 2 (Output)
 
     // --- 5. NETWORK BACKWARD PASS ---
+    // The backprop layer will now naturally calculate gradients for BOTH the X and Y channels!
     float4 errors[ACTIVATION_QUARTETS_PER_NETWORK];
     backpropLayer(targetInput, activations, errors, 4, 1, 2, 6, 36, OUTPUT_LAYER);   // Output -> Hidden
     backpropLayer(targetInput, activations, errors, 2, 4, 0, 2, 0,  HIDDEN_LAYER);   // Hidden -> Input
     gateEncodingBackprop(gateData, errors);                                          // Distribute to Vertices
 
     // --- 6. LOSS ACCUMULATION ---
-    float diff = target - activations[6].x; // Output layer starts at index 36 (36 / 4 = 9, assuming tight packing, but using activation index mapped logically)
-    float pixelLoss = dot(diff, diff);      // MSE
+    // We calculate the error for both channels to show in your UI
+    float2 diff = targetInput.xy - activations[6].xy; 
+    float pixelLoss = dot(diff, diff) * 0.5f; // Average MSE of both channels
     
     LossBuffer.InterlockedAdd(0, (uint)(pixelLoss * 1000.0f));
 }

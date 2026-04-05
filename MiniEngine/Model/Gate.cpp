@@ -492,7 +492,7 @@ namespace Sponza
             uint32_t screenWidth;
             uint32_t screenHeight;
             uint32_t totalMeshColorPoints;
-            uint32_t padding0;
+            float aoRadius;
             uint32_t uniqueVertexCount;
             DirectX::XMFLOAT3 sunDirection;
             uint32_t padding1;
@@ -500,7 +500,7 @@ namespace Sponza
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
-            m_TotalMeshColorPoints, 0, m_UniqueSpatialVertexCount,
+            m_TotalMeshColorPoints, m_AoRadius, m_UniqueSpatialVertexCount,
             DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()), 0
         };
         trainCtx.SetConstantArray(0, 20, &cb);
@@ -767,6 +767,7 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 1024, "%d Groups * 1024 Threads");
         ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("AO Radius", &m_AoRadius, 10.0f, 1000.0f, "%.1f"); // Add this
         ImGui::Spacing();
 
         ImGui::Separator();
