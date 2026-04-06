@@ -642,8 +642,8 @@ namespace Sponza
         struct InferenceConstants
         {
             uint32_t globalTriangleOffset;
-            uint32_t meshColorResolution;
-            uint32_t pointsPerTri;
+            uint32_t lightingMode;
+            uint32_t renderFlags;
             uint32_t materialIdx;
 
             DirectX::XMFLOAT3 sunDirection;
@@ -661,10 +661,15 @@ namespace Sponza
             uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
             uint32_t baseVertex = mesh.vertexDataByteOffset / m_Model->GetVertexStride();
 
+            // 2. Pack our booleans into the flags variable
+            uint32_t flags = 0;
+            if (m_TexturelessView)         flags |= (1 << 0); // Set 1st bit
+            if (m_DisableDirectionalLight) flags |= (1 << 1); // Set 2nd bit
+
             InferenceConstants cb;
             cb.globalTriangleOffset = globalTriangleOffset;
-            cb.meshColorResolution = m_Resolution;
-            cb.pointsPerTri = m_PointsPerTri;
+            cb.lightingMode = static_cast<uint32_t>(m_LightingMode);
+            cb.renderFlags = flags;
             cb.materialIdx = mesh.materialIndex;
 
             cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
@@ -735,13 +740,9 @@ namespace Sponza
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::Text("Environment Lighting");
-
-        // Static variables initialized to Sponza defaults
         static float sunOri = -0.5f;
         static float sunInc = 0.75f;
         static float sunInt = 4.0f;
-
-        // Whenever the slider is moved, the value propagates to the main Sponza system
         if (ImGui::SliderFloat("Sun Orientation", &sunOri, -3.14159f, 3.14159f, "%.3f rad"))
             m_SunOrientation = sunOri;
         if (ImGui::SliderFloat("Sun Inclination", &sunInc, 0.0f, 1.0f, "%.3f"))
@@ -767,7 +768,11 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 1024, "%d Groups * 1024 Threads");
         ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("AO Radius", &m_AoRadius, 10.0f, 1000.0f, "%.1f"); // Add this
+        ImGui::SliderFloat("AO Radius", &m_AoRadius, 10.0f, 1000.0f, "%.1f");
+        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows" };
+        ImGui::Combo("Lighting Mode", &m_LightingMode, lightingModes, IM_ARRAYSIZE(lightingModes));
+        ImGui::Checkbox("Textureless View (Clay Render)", &m_TexturelessView);
+        ImGui::Checkbox("Disable Directional Light", &m_DisableDirectionalLight); // Add this
         ImGui::Spacing();
 
         ImGui::Separator();

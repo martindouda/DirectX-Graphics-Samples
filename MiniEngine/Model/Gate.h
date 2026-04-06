@@ -115,6 +115,9 @@ namespace Sponza
         float    m_WeightDecay = 0.01f;
         float    m_ScreenSpaceRatio = 0.85f;
         float    m_AoRadius = 150.0f;
+        int      m_LightingMode = 3; // 0 = None, 1 = AO Only, 2 = Shadows Only, 3 = Both
+        bool     m_TexturelessView = false;
+        bool     m_DisableDirectionalLight = false;
 
         // --- GPU Resources: Geometry & Features ---
         StructuredBuffer  m_GlobalTriangleBuffer;

@@ -10,8 +10,8 @@
 cbuffer MeshConstants : register(b1) 
 { 
     uint globalTriangleOffset; 
-    uint meshColorResolution;
-    uint pointsPerTri;
+    uint lightingMode;
+    uint renderFlags;
     uint materialIdx;
 
     float3 sunDirection;
@@ -90,21 +90,51 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     evalLayer(activationsB, activationsA, 36, 1, 4, OUTPUT_LAYER);
 
     // --- Extract both masks from the network's float4 output ---
-    float shadowMask = saturate(activationsA[0].x); 
-    float aoMask = saturate(activationsA[0].y); 
+    float networkShadow = saturate(activationsA[0].x); 
+    float networkAO     = saturate(activationsA[0].y); 
+    
+    // Default to fully unoccluded (1.0)
+    float shadowMask = 1.0f;
+    float aoMask = 1.0f;
+
+    // Apply masks based on the UI toggle
+    // Mode 0: None (Masks remain 1.0)
+    // Mode 1: AO Only
+    // Mode 2: Shadows Only
+    // Mode 3: Both
+    
+    if (lightingMode == 1 || lightingMode == 3)
+        aoMask = networkAO;
+        
+    if (lightingMode == 2 || lightingMode == 3)
+        shadowMask = networkShadow;
     
     // --- 2. TEXTURING & NORMAL MAPPING ---
     
+    // Unpack our toggle flags
+    bool useTexturelessView      = (renderFlags & (1 << 0)) != 0;
+    bool disableDirectionalLight = (renderFlags & (1 << 1)) != 0;
+
     float4 albedo = BindlessTextures[materialIdx * 6 + 0].Sample(LinearSampler, input.UV);
+    
+    // Override the RGB color with a neutral clay gray if the toggle is active
+    if (useTexturelessView)
+    {
+        albedo.rgb = float3(0.8f, 0.8f, 0.8f);
+    }
+    
     float3 N = ComputeNormal(input);
     float3 L = normalize(sunDirection);
     float NdotL = saturate(dot(N, L));
     
-    // Apply the X channel to direct sunlight
-    float3 directLight = albedo.rgb * NdotL * sunIntensity * shadowMask; 
+    // Direct sunlight is zeroed out if the toggle is active
+    float3 directLight = 0.0f;
+    if (!disableDirectionalLight)
+        directLight = albedo.rgb * NdotL * sunIntensity * shadowMask; 
     
-    // Apply the Y channel to ambient light
-    float3 ambientLight = albedo.rgb * 0.4f * aoMask; 
+    // If we turned off the sun, boost the ambient light so we can see the AO clearly!
+    float ambientBase = disableDirectionalLight ? 1.0f : 0.4f;
+    float3 ambientLight = albedo.rgb * ambientBase * aoMask; 
     
     return float4(directLight + ambientLight, albedo.a);
 }
