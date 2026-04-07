@@ -79,7 +79,8 @@ cbuffer RootConstantsCB : register(b0)
     float aoRadius;
     uint uniqueVertexCount;
     float3 sunDirection;
-    uint padding1;
+    uint featureQuartets;
+    uint mlpQuartets;
 };
 #endif
 

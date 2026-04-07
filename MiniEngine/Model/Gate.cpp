@@ -96,6 +96,8 @@ namespace Sponza
         m_TrainingStep = 1;
 
         m_Resolution = m_DesiredResolution;
+        m_FeatureQuartets = m_DesiredFeatureQuartets;
+
         BuildSpatialIndex();
         AllocateBuffers();
 
@@ -331,40 +333,44 @@ namespace Sponza
 
     void Gate::AllocateBuffers()
     {
-        // A. DUPLICATED BUFFER (Inference / Reading in Pixel Shader)
-        std::vector<GateFeature> duplicatedFeatures(m_TotalMeshColorPoints);
-        for (uint32_t i = 0; i < m_TotalMeshColorPoints; ++i)
+        // A. DUPLICATED BUFFER
+        uint32_t totalFeatureFloats = m_TotalMeshColorPoints * m_FeatureQuartets;
+        std::vector<DirectX::XMFLOAT4> duplicatedFeatures(totalFeatureFloats);
+        for (uint32_t i = 0; i < totalFeatureFloats; ++i)
         {
-            duplicatedFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-            duplicatedFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+            duplicatedFeatures[i] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", m_TotalMeshColorPoints, sizeof(GateFeature), duplicatedFeatures.data());
+        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalFeatureFloats, sizeof(DirectX::XMFLOAT4), duplicatedFeatures.data());
 
-        // B. UNIQUE BUFFERS (Training / Backprop / Optimization)
-        std::vector<GateFeature> uniqueFeatures(m_UniqueSpatialVertexCount);
-        for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
+        // B. UNIQUE BUFFERS
+        uint32_t uniqueFeatureFloats = m_UniqueSpatialVertexCount * m_FeatureQuartets;
+        std::vector<DirectX::XMFLOAT4> uniqueFeatures(uniqueFeatureFloats);
+        for (uint32_t i = 0; i < uniqueFeatureFloats; ++i)
         {
-            uniqueFeatures[i].data[0] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-            uniqueFeatures[i].data[1] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
+            uniqueFeatures[i] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         }
-        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", m_UniqueSpatialVertexCount, sizeof(GateFeature), uniqueFeatures.data());
+        m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", uniqueFeatureFloats, sizeof(DirectX::XMFLOAT4), uniqueFeatures.data());
 
-        // Adam optimizer and gradients work ONLY with unique data
-        std::vector<AdamData> initialFeatureAdam(m_UniqueSpatialVertexCount * 2, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", m_UniqueSpatialVertexCount * 2, sizeof(AdamData), initialFeatureAdam.data());
-        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", m_UniqueSpatialVertexCount * 8, sizeof(float), nullptr);
+        std::vector<AdamData> initialFeatureAdam(uniqueFeatureFloats, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
+        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", uniqueFeatureFloats, sizeof(AdamData), initialFeatureAdam.data());
+        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", uniqueFeatureFloats, sizeof(DirectX::XMINT4), nullptr);
 
-        // C. MLP PARAMETERS (Remain unchanged)
-        uint32_t numNetworkParameters = 212;
-        std::vector<float> initialWeights(numNetworkParameters);
-        for (uint32_t i = 0; i < numNetworkParameters; ++i)
+        // C. MLP PARAMETERS (Dynamic Calculation)
+        // Hidden Layer: 16 neurons. Output Layer: 4 neurons.
+        // Weights 1: 16 neurons * (m_FeatureQuartets * 4 inputs) + 16 biases
+        // Weights 2: 4 neurons * 16 hidden inputs + 4 biases (Fixed at 68)
+        m_MlpParameterCount = (16 * (m_FeatureQuartets * 4) + 16) + 68;
+        m_MlpQuartets = m_MlpParameterCount / 4;
+
+        std::vector<float> initialWeights(m_MlpParameterCount);
+        for (uint32_t i = 0; i < m_MlpParameterCount; ++i)
             initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
 
-        m_GateMLPBuffer.Create(L"MLP Parameters", numNetworkParameters, sizeof(float), initialWeights.data());
-        m_GateMLPGradientBuffer.Create(L"MLP Gradients", numNetworkParameters, sizeof(float), nullptr);
+        m_GateMLPBuffer.Create(L"MLP Parameters", m_MlpParameterCount, sizeof(float), initialWeights.data());
+        m_GateMLPGradientBuffer.Create(L"MLP Gradients", m_MlpParameterCount, sizeof(float), nullptr);
 
-        std::vector<AdamData> initialMLPAdam(53, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", 53, sizeof(AdamData), initialMLPAdam.data());
+        std::vector<AdamData> initialMLPAdam(m_MlpQuartets, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
+        m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", m_MlpQuartets, sizeof(AdamData), initialMLPAdam.data());
     }
 
     void Gate::InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
@@ -374,7 +380,7 @@ namespace Sponza
         m_GateRootSig[0].InitAsConstantBuffer(0); // b0
         m_GateRootSig[1].InitAsBufferSRV(0);      // t0 (FeatureBuffer)
         m_GateRootSig[2].InitAsBufferSRV(1);      // t1 (MLP)
-        m_GateRootSig[3].InitAsConstants(1, 8);   // b1 (Inference Constants)
+        m_GateRootSig[3].InitAsConstants(1, 9);   // b1 (Inference Constants)
         m_GateRootSig[4].InitAsBufferSRV(2);      // t2 (GlobalTriangleBuffer)
         m_GateRootSig[5].InitAsDescriptorTable(1);
         m_GateRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
@@ -402,7 +408,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(15, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 20); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 21); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
 
@@ -495,15 +501,17 @@ namespace Sponza
             float aoRadius;
             uint32_t uniqueVertexCount;
             DirectX::XMFLOAT3 sunDirection;
-            uint32_t padding1;
+            uint32_t featureQuartets;
+            uint32_t mlpQuartets;
         } cb = {
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
             m_TotalMeshColorPoints, m_AoRadius, m_UniqueSpatialVertexCount,
-            DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()), 0
+            DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()),
+			m_FeatureQuartets, m_MlpQuartets
         };
-        trainCtx.SetConstantArray(0, 20, &cb);
+        trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
 
         // --- BACKPROP SETUP ---
 
@@ -645,6 +653,7 @@ namespace Sponza
             uint32_t lightingMode;
             uint32_t renderFlags;
             uint32_t materialIdx;
+            uint32_t featureQuartets;
 
             DirectX::XMFLOAT3 sunDirection;
             float sunIntensity;
@@ -671,6 +680,7 @@ namespace Sponza
             cb.lightingMode = static_cast<uint32_t>(m_LightingMode);
             cb.renderFlags = flags;
             cb.materialIdx = mesh.materialIndex;
+			cb.featureQuartets = m_FeatureQuartets;
 
             cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
             cb.sunIntensity = sunIntensity;

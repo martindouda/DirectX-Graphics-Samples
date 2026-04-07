@@ -77,11 +77,6 @@ namespace Sponza
             uint32_t pad;
         };
 
-        struct GateFeature
-        {
-            DirectX::XMFLOAT4 data[2];
-        };
-
         struct AdamData
         {
             DirectX::XMFLOAT4 mean;
@@ -103,8 +98,16 @@ namespace Sponza
         bool     m_IsTrainingPaused = true;
         uint32_t m_TrainingStep = 1;
         uint32_t m_Resolution = 256;
-        int      m_DesiredResolution = 8;        // For UI
+        int      m_DesiredResolution = 256;        // For UI
         uint32_t m_PointsPerTri = 0;
+
+        // Add to your Hyperparameters section:
+        uint32_t m_DesiredFeatureQuartets = 2; // For UI
+        uint32_t m_FeatureQuartets = 2;
+
+        // Add to track dynamic MLP size:
+        uint32_t m_MlpParameterCount = 212;
+        uint32_t m_MlpQuartets = 53;
 
         int      m_BackpropDispatchedGroups = 1024; // * 1024 triangles per step
         float    m_GlobalLearningRate = 0.1f;

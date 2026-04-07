@@ -13,6 +13,7 @@ cbuffer MeshConstants : register(b1)
     uint lightingMode;
     uint renderFlags;
     uint materialIdx;
+    uint featureQuartets;
 
     float3 sunDirection;
     float sunIntensity;
@@ -119,9 +120,7 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     
     // Override the RGB color with a neutral clay gray if the toggle is active
     if (useTexturelessView)
-    {
         albedo.rgb = float3(0.8f, 0.8f, 0.8f);
-    }
     
     float3 N = ComputeNormal(input);
     float3 L = normalize(sunDirection);
