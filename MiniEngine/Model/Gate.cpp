@@ -96,7 +96,10 @@ namespace Sponza
         m_TrainingStep = 1;
 
         m_Resolution = m_DesiredResolution;
-        m_FeatureQuartets = m_DesiredFeatureQuartets;
+
+        // Calculate required float4s (Ceiling division: (Floats + 3) / 4)
+        m_FeatureFloats = m_DesiredFeatureFloats;
+        m_FeatureQuartets = (m_FeatureFloats + 3) / 4;
 
         BuildSpatialIndex();
         AllocateBuffers();
@@ -378,7 +381,7 @@ namespace Sponza
         m_GateRootSig[0].InitAsConstantBuffer(0); // b0
         m_GateRootSig[1].InitAsBufferSRV(0);      // t0 (FeatureBuffer)
         m_GateRootSig[2].InitAsBufferSRV(1);      // t1 (MLP)
-        m_GateRootSig[3].InitAsConstants(1, 9);   // b1 (Inference Constants)
+        m_GateRootSig[3].InitAsConstants(1, 10);   // b1 (Inference Constants)
         m_GateRootSig[4].InitAsBufferSRV(2);      // t2 (GlobalTriangleBuffer)
         m_GateRootSig[5].InitAsDescriptorTable(1);
         m_GateRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
@@ -406,7 +409,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(15, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 21); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 22); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
 
@@ -477,8 +480,8 @@ namespace Sponza
         trainCtx.SetRootSignature(m_GateTrainRootSig);
         trainCtx.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
 
-        float actualFeatureLR = m_GlobalLearningRate * (1.0f - m_LearningRateRatio);
-        float actualMLPLR = m_GlobalLearningRate * m_LearningRateRatio * 0.05f;
+        float actualFeatureLR = m_GlobalLearningRate * m_LearningRateRatio;
+        float actualMLPLR = m_GlobalLearningRate * (1.0f - m_LearningRateRatio) * 0.05f;
 
         struct TrainingConstants
         {
@@ -499,6 +502,7 @@ namespace Sponza
             float aoRadius;
             uint32_t uniqueVertexCount;
             DirectX::XMFLOAT3 sunDirection;
+            uint32_t featureFloats;
             uint32_t featureQuartets;
             uint32_t mlpQuartets;
         } cb = {
@@ -507,7 +511,7 @@ namespace Sponza
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
             m_TotalMeshColorPoints, m_AoRadius, m_UniqueSpatialVertexCount,
             DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()),
-			m_FeatureQuartets, m_MlpQuartets
+			m_FeatureFloats, m_FeatureQuartets, m_MlpQuartets
         };
         trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
 
@@ -651,10 +655,12 @@ namespace Sponza
             uint32_t lightingMode;
             uint32_t renderFlags;
             uint32_t materialIdx;
-            uint32_t featureQuartets;
 
             DirectX::XMFLOAT3 sunDirection;
             float sunIntensity;
+
+            uint32_t featureFloats;
+            uint32_t featureQuartets;
         };
 
         auto cmdList = gfxContext.GetCommandList();
@@ -678,6 +684,8 @@ namespace Sponza
             cb.lightingMode = static_cast<uint32_t>(m_LightingMode);
             cb.renderFlags = flags;
             cb.materialIdx = mesh.materialIndex;
+
+			cb.featureFloats = m_FeatureFloats;
 			cb.featureQuartets = m_FeatureQuartets;
 
             cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
@@ -764,10 +772,10 @@ namespace Sponza
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
         ImGui::SliderInt("Max Resolution Scale", &m_DesiredResolution, 1, 512);
-        ImGui::SliderInt("Feature Quartets", (int*)&m_DesiredFeatureQuartets, 1, 8, "%d (* 4 Floats)"); // Add this!
+        ImGui::SliderInt("Feature Dimension (Floats)", (int*)&m_DesiredFeatureFloats, 1, 32);
 
         // Update the condition to check BOTH variables
-        if (m_DesiredResolution != (int)m_Resolution || m_DesiredFeatureQuartets != m_FeatureQuartets)
+        if (m_DesiredResolution != (int)m_Resolution || m_DesiredFeatureFloats != m_FeatureFloats)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Architecture changed! Reset training to apply.");
 
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
@@ -788,7 +796,7 @@ namespace Sponza
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::SliderFloat("Learning Rate", &m_GlobalLearningRate, 0.00001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Learning Rate", &m_GlobalLearningRate, 0.0001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("Features/MLP Ratio", &m_LearningRateRatio, 0.0f, 1.0f, "%.2f");
         ImGui::Spacing();
 

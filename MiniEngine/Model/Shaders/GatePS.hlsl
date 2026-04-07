@@ -9,10 +9,12 @@ cbuffer MeshConstants : register(b1)
     uint lightingMode;
     uint renderFlags;
     uint materialIdx;
-    uint featureQuartets; // Dynamic feature scaling constant
 
     float3 sunDirection;
     float sunIntensity;
+
+    uint featureFloats;
+    uint featureQuartets; 
 };
 
 struct VSOutput 
@@ -69,7 +71,16 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         float4 d0 = FeatureBuffer[flatIdx0 + q];
         float4 d1 = FeatureBuffer[flatIdx1 + q];
         float4 d2 = FeatureBuffer[flatIdx2 + q];
-        activationsA[q] = weight0 * d0 + weight1 * d1 + weight2 * d2;
+        
+        float4 act = weight0 * d0 + weight1 * d1 + weight2 * d2;
+
+        // MASKING: Zero out any floats beyond the user's requested dimension
+        if (q * 4 + 0 >= featureFloats) act.x = 0.0f;
+        if (q * 4 + 1 >= featureFloats) act.y = 0.0f;
+        if (q * 4 + 2 >= featureFloats) act.z = 0.0f;
+        if (q * 4 + 3 >= featureFloats) act.w = 0.0f;
+
+        activationsA[q] = act;
     }
 
     // Dynamic Layer Evaluation

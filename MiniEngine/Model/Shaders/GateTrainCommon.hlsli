@@ -78,6 +78,7 @@ cbuffer RootConstantsCB : register(b0)
     float aoRadius;
     uint uniqueVertexCount;
     float3 sunDirection;
+    uint featureFloats;
     uint featureQuartets; // Dynamic size variable injected from C++ UI
     uint mlpQuartets; // Dynamic size variable calculated in C++
 };
@@ -295,30 +296,48 @@ void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint grad
 
 void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK])
 {
-    // Calculate flat array offsets for the three corner vertices
     uint base0 = gateData.indices.x * featureQuartets;
     uint base1 = gateData.indices.y * featureQuartets;
     uint base2 = gateData.indices.z * featureQuartets;
 
-    // Loop through the dynamic number of feature quartets
     for (uint q = 0; q < featureQuartets; ++q)
     {
         float4 f0 = UniqueFeatureBuffer[base0 + q];
         float4 f1 = UniqueFeatureBuffer[base1 + q];
         float4 f2 = UniqueFeatureBuffer[base2 + q];
         
-        // Barycentric interpolation of the dynamic features
-        activations[activationIndex++] = gateData.barycentrics.x * f0 + gateData.barycentrics.y * f1 + gateData.barycentrics.z * f2;
+        float4 act = gateData.barycentrics.x * f0 + gateData.barycentrics.y * f1 + gateData.barycentrics.z * f2;
+
+        // MASKING: Zero out any floats beyond the user's requested dimension
+        if (q * 4 + 0 >= featureFloats)
+            act.x = 0.0f;
+        if (q * 4 + 1 >= featureFloats)
+            act.y = 0.0f;
+        if (q * 4 + 2 >= featureFloats)
+            act.z = 0.0f;
+        if (q * 4 + 3 >= featureFloats)
+            act.w = 0.0f;
+
+        activations[activationIndex++] = act;
     }
 }
 
 void gateEncodingBackprop(const GateEncodingData gateData, inout float4 errors[ACTIVATION_QUARTETS_PER_NETWORK])
 {
-    // Distribute the error back to the vertices dynamically based on barycentric weights
     for (uint q = 0; q < featureQuartets; ++q)
     {
         float4 inputGrad = errors[q];
         
+        // MASKING: Prevent gradients from bleeding into unused features
+        if (q * 4 + 0 >= featureFloats)
+            inputGrad.x = 0.0f;
+        if (q * 4 + 1 >= featureFloats)
+            inputGrad.y = 0.0f;
+        if (q * 4 + 2 >= featureFloats)
+            inputGrad.z = 0.0f;
+        if (q * 4 + 3 >= featureFloats)
+            inputGrad.w = 0.0f;
+
         accumulateGradient(FeatureGradientBuffer, gateData.indices.x * featureQuartets + q, inputGrad * gateData.barycentrics.x);
         accumulateGradient(FeatureGradientBuffer, gateData.indices.y * featureQuartets + q, inputGrad * gateData.barycentrics.y);
         accumulateGradient(FeatureGradientBuffer, gateData.indices.z * featureQuartets + q, inputGrad * gateData.barycentrics.z);

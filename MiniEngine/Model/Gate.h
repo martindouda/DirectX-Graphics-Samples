@@ -102,8 +102,9 @@ namespace Sponza
         uint32_t m_PointsPerTri = 0;
 
         // Add to your Hyperparameters section:
-        uint32_t m_DesiredFeatureQuartets = 2; // For UI
-        uint32_t m_FeatureQuartets = 2;
+        uint32_t m_DesiredFeatureFloats = 4; // For UI
+        uint32_t m_FeatureFloats = 4;
+        uint32_t m_FeatureQuartets = 1;
 
         // Add to track dynamic MLP size:
         uint32_t m_MlpParameterCount = 212;
