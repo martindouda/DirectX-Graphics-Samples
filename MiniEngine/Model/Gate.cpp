@@ -356,9 +356,6 @@ namespace Sponza
         m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", uniqueFeatureFloats, sizeof(DirectX::XMINT4), nullptr);
 
         // C. MLP PARAMETERS (Dynamic Calculation)
-        // Hidden Layer: 16 neurons. Output Layer: 4 neurons.
-        // Weights 1: 16 neurons * (m_FeatureQuartets * 4 inputs) + 16 biases
-        // Weights 2: 4 neurons * 16 hidden inputs + 4 biases (Fixed at 68)
         m_MlpParameterCount = (16 * (m_FeatureQuartets * 4) + 16) + 68;
         m_MlpQuartets = m_MlpParameterCount / 4;
 
@@ -366,8 +363,9 @@ namespace Sponza
         for (uint32_t i = 0; i < m_MlpParameterCount; ++i)
             initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
 
-        m_GateMLPBuffer.Create(L"MLP Parameters", m_MlpParameterCount, sizeof(float), initialWeights.data());
-        m_GateMLPGradientBuffer.Create(L"MLP Gradients", m_MlpParameterCount, sizeof(float), nullptr);
+        // --- CHANGED: Use m_MlpQuartets and XMFLOAT4/XMINT4 for the stride! ---
+        m_GateMLPBuffer.Create(L"MLP Parameters", m_MlpQuartets, sizeof(DirectX::XMFLOAT4), initialWeights.data());
+        m_GateMLPGradientBuffer.Create(L"MLP Gradients", m_MlpQuartets, sizeof(DirectX::XMINT4), nullptr);
 
         std::vector<AdamData> initialMLPAdam(m_MlpQuartets, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", m_MlpQuartets, sizeof(AdamData), initialMLPAdam.data());
@@ -553,7 +551,7 @@ namespace Sponza
         // 3. Optimize features
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4); // START 4
         trainCtx.SetPipelineState(m_GateOptFeatPSO);
-        trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * 2, 1024), 1, 1);
+        trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount * m_FeatureQuartets, 1024), 1, 1);
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 5); // END 5
 
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
@@ -766,9 +764,12 @@ namespace Sponza
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
         ImGui::SliderInt("Max Resolution Scale", &m_DesiredResolution, 1, 512);
+        ImGui::SliderInt("Feature Quartets", (int*)&m_DesiredFeatureQuartets, 1, 8, "%d (* 4 Floats)"); // Add this!
 
-        if (m_DesiredResolution != (int)m_Resolution)
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Resolution changed! Reset training to apply.");
+        // Update the condition to check BOTH variables
+        if (m_DesiredResolution != (int)m_Resolution || m_DesiredFeatureQuartets != m_FeatureQuartets)
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Architecture changed! Reset training to apply.");
+
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
             ResetTraining();
 

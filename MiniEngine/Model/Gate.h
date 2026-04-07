@@ -131,13 +131,13 @@ namespace Sponza
         StructuredBuffer  m_UniqueFeatureBuffer;        // Unique      (for write by Adam optimizer)
         StructuredBuffer  m_VertexMappingBuffer;        // N:M mapping (for copying data to duplicates)
 
-        ByteAddressBuffer m_GateFeatureGradientBuffer;
-        ByteAddressBuffer m_GateFeatureAdamBuffer;
+        StructuredBuffer m_GateFeatureGradientBuffer;
+        StructuredBuffer m_GateFeatureAdamBuffer;
 
         // --- GPU Resources: MLP ---
-        ByteAddressBuffer m_GateMLPBuffer;
-        ByteAddressBuffer m_GateMLPGradientBuffer;
-        ByteAddressBuffer m_GateMLPAdamBuffer;
+        StructuredBuffer m_GateMLPBuffer;
+        StructuredBuffer m_GateMLPGradientBuffer;
+        StructuredBuffer m_GateMLPAdamBuffer;
 
         // --- Root Signatures & Pipeline States ---
 
