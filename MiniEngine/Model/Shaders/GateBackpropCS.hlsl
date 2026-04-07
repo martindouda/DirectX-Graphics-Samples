@@ -2,7 +2,6 @@
 
 #include "GateTrainCommon.hlsli"
 
-// Cosine-weighted hemisphere sampling
 float3 getCosineHemisphereSample(float u1, float u2, float3 normal)
 {
     float r = sqrt(u1);
@@ -12,17 +11,12 @@ float3 getCosineHemisphereSample(float u1, float u2, float3 normal)
     float y = r * sin(theta);
     float z = sqrt(max(0.0f, 1.0f - u1));
 
-    // Create an orthonormal basis around the normal
     float3 up = abs(normal.z) < 0.999f ? float3(0, 0, 1) : float3(1, 0, 0);
     float3 tangent = normalize(cross(up, normal));
     float3 bitangent = cross(normal, tangent);
 
     return tangent * x + bitangent * y + normal * z;
 }
-
-// =========================================================================
-//  KERNEL: Forward Pass & Gradient Accumulation
-// =========================================================================
 
 [numthreads(BACKPROP_THREADGROUP_SIZE, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
@@ -36,7 +30,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     float strategyRoll = rand(rng); 
 
-    // --- Active Active Learning Strategy (Screen-Space vs Random) ---
+    // --- Active Learning Strategy ---
+    // Prioritizes training on pixels that are visible on-screen and have the 
+    // lowest Adam step count (meaning they have been trained the least).
     if (strategyRoll < screenSpaceRatio) 
     {
         for (int i = 0; i < 16; ++i)
@@ -44,27 +40,22 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint2 pixelCoord = uint2((uint)(rand(rng) * screenWidth), (uint)(rand(rng) * screenHeight));
             uint rawID = VisibilityBuffer.Load(int3(pixelCoord, 0)).r;
 
-            if (rawID == 0) // Zero is sky
-                continue;
+            if (rawID == 0) continue; // Skip Sky
 
             uint candidateTriID = rawID - 1;
 
-            if (candidateTriID >= totalTriangles)
-                continue;
+            if (candidateTriID >= totalTriangles) continue;
 
-            // Fetch adaptive resolution data for the candidate triangle
             GlobalTriangle candidateTri = GlobalTriangleBuffer[candidateTriID];
             uint baseIdx = candidateTri.pointOffset;
             uint localPts = candidateTri.pointsPerTri;
             
-            // Get a random point within this triangle
             uint randomPt = min((uint)(rand(rng) * localPts), localPts - 1);
             uint uniquePt = VertexMappingBuffer[baseIdx + randomPt];
 
-            // Read the step count from the Adam buffer ONLY for this selected point
-            uint stepCount = FeatureAdamBuffer[uniquePt * 2].stepCount;
+            // Fetch the Adam step count from the first quartet of the vertex to determine age
+            uint stepCount = FeatureAdamBuffer[uniquePt * featureQuartets].stepCount;
 
-            // Check if this point is less trained than our worst candidate so far
             if (stepCount < lowestStepCount)
             {
                 lowestStepCount = stepCount;
@@ -73,17 +64,15 @@ void main(uint3 DTid : SV_DispatchThreadID)
             }
         }
 
-        // Fallback if no valid visible triangle was found in the random samples
+        // Fallback to purely random exploration if no valid screen triangle was found
         if (!foundValidCandidate) 
             bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
     }
     else
     {
-        // Random exploration
         bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
     }
 
-    // --- Generate Random Barycentric Coordinates ---
     float u1 = rand(rng); 
     float u2 = rand(rng); 
     float sqrt_u1 = sqrt(u1);
@@ -92,9 +81,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     GlobalTriangle origTri = GlobalTriangleBuffer[bestTriID];
     uint baseIndex = origTri.pointOffset;
     uint localRes = origTri.resolution;
-    uint localPts = origTri.pointsPerTri;
 
-    // Get local grid coordinates
     uint i0, j0, i1, j1, i2, j2;
     float weight0, weight1, weight2;
     getMeshColorIndicesAndWeights(barycentrics, localRes, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
@@ -105,25 +92,19 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     GateEncodingData gateData;
     gateData.barycentrics = float3(weight0, weight1, weight2);
-    
-    // Convert duplicated grid index to unique ID
     gateData.indices.x = VertexMappingBuffer[baseIndex + idx0];
     gateData.indices.y = VertexMappingBuffer[baseIndex + idx1];
     gateData.indices.z = VertexMappingBuffer[baseIndex + idx2];
     
-    // --- 1. GET POSITION AND NORMAL FOR RAY QUERY ---
-    // Assume position is at offset 0 (DXGI_FORMAT_R32G32B32_FLOAT) in the vertex buffer
     float3 p0 = asfloat(VertexUVBuffer.Load3(origTri.i0 * VertexStride));
     float3 p1 = asfloat(VertexUVBuffer.Load3(origTri.i1 * VertexStride));
     float3 p2 = asfloat(VertexUVBuffer.Load3(origTri.i2 * VertexStride));
 
-    // World position of the sample
     float3 worldPos = barycentrics.x * p0 + barycentrics.y * p1 + barycentrics.z * p2;
-
-    // Fast calculation of the geometric normal for offset (prevents self-shadowing)
     float3 faceNormal = normalize(cross(p1 - p0, p2 - p0));
 
-    // --- 2A. INLINE RAY TRACING (SHADOW QUERY) ---
+    // --- DXR Inline Ray Tracing (Ground Truth Generation) ---
+    // 1. Trace a directional ray towards the sun for hard shadows
     RayDesc shadowRay;
     shadowRay.Origin = worldPos + faceNormal * 0.05f;
     shadowRay.Direction = sunDirection;
@@ -135,7 +116,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     qShadow.Proceed();
     bool isShadowed = (qShadow.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
-    // --- 2B. INLINE RAY TRACING (AO QUERY) ---
+    // 2. Trace a random cosine-weighted ray for Ambient Occlusion
     float u3 = rand(rng);
     float u4 = rand(rng);
     float3 aoDirection = getCosineHemisphereSample(u3, u4, faceNormal);
@@ -151,32 +132,38 @@ void main(uint3 DTid : SV_DispatchThreadID)
     qAO.Proceed();
     bool isOccluded = (qAO.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
-    // --- 3. GROUND TRUTH TARGET (DUAL CHANNEL) ---
+    // Target format: (Shadow, AO, unused, unused)
     float targetShadow = isShadowed ? 0.0f : 1.0f;
     float targetAO = isOccluded ? 0.0f : 1.0f;
-    
-    // Pack both targets into the network's expected output format
     float4 targetInput = float4(targetShadow, targetAO, 0.0f, 0.0f);
 
-    // --- 4. NETWORK FORWARD PASS ---
+    // --- Dynamic Network Mathematics ---
+    // The MLP buffer is a flat array of weights. We must calculate the offset for the output layer
+    // based on the dynamic feature size.
+    // Hidden Layer = 16 neurons. Output Layer = 4 neurons.
+    // Weight parameters for Hidden Layer = 16 neurons * featureQuartets inputs + 16 biases
+    // Since we process in quartets (groups of 4 floats), the offset is (16/4)*featureQuartets*4 + 16/4
+    // Which simplifies to: 16 * featureQuartets + 4
+    uint hiddenOffset = 0;
+    uint outputOffset = (16 * featureQuartets) + 4;
+
     float4 activations[ACTIVATION_QUARTETS_PER_NETWORK];
     uint activationIndex = 0;
     
-    gateEncoding(gateData, activationIndex, activations);                // Layer 0 (Input)
-    evalLayerActivations(activations, 0,  0, 2, 4, 2, HIDDEN_LAYER);     // Layer 1 (Hidden)
-    evalLayerActivations(activations, 36, 2, 6, 1, 4, OUTPUT_LAYER);     // Layer 2 (Output)
+    // Evaluate Forward Pass
+    gateEncoding(gateData, activationIndex, activations);                
+    evalLayerActivations(activations, hiddenOffset, 0,               featureQuartets,     4, featureQuartets, HIDDEN_LAYER);      
+    evalLayerActivations(activations, outputOffset, featureQuartets, featureQuartets + 4, 1, 4,               OUTPUT_LAYER);      
 
-    // --- 5. NETWORK BACKWARD PASS ---
-    // The backprop layer will now naturally calculate gradients for BOTH the X and Y channels!
+    // Evaluate Backward Pass
     float4 errors[ACTIVATION_QUARTETS_PER_NETWORK];
-    backpropLayer(targetInput, activations, errors, 4, 1, 2, 6, 36, OUTPUT_LAYER);   // Output -> Hidden
-    backpropLayer(targetInput, activations, errors, 2, 4, 0, 2, 0,  HIDDEN_LAYER);   // Hidden -> Input
-    gateEncodingBackprop(gateData, errors);                                          // Distribute to Vertices
+    backpropLayer(targetInput, activations, errors, 4,               1, featureQuartets, featureQuartets + 4, outputOffset, OUTPUT_LAYER);   
+    backpropLayer(targetInput, activations, errors, featureQuartets, 4, 0,               featureQuartets,     hiddenOffset, HIDDEN_LAYER);   
+    gateEncodingBackprop(gateData, errors);                                          
 
-    // --- 6. LOSS ACCUMULATION ---
-    // We calculate the error for both channels to show in your UI
-    float2 diff = targetInput.xy - activations[6].xy; 
-    float pixelLoss = dot(diff, diff) * 0.5f; // Average MSE of both channels
+    // Loss Accumulation for GUI visualization
+    float2 diff = targetInput.xy - activations[featureQuartets + 4].xy; 
+    float pixelLoss = dot(diff, diff) * 0.5f; 
     
     LossBuffer.InterlockedAdd(0, (uint)(pixelLoss * 1000.0f));
 }

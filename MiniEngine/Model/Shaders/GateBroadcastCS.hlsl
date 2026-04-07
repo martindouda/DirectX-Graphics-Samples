@@ -11,11 +11,14 @@ void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint globalPointID = DTid.x;
     
-    // RootConstants CB needs to pass totalMeshColorPoints
     if (globalPointID >= totalMeshColorPoints) 
         return;
 
     uint uniqueID = VertexMappingBuffer[globalPointID];
-    GateFeature feature = UniqueFeatureBuffer[uniqueID];
-    DuplicatedFeatureBuffer[globalPointID] = feature;
+    
+    uint duplicatedBase = globalPointID * featureQuartets;
+    uint uniqueBase = uniqueID * featureQuartets;
+
+    for (uint q = 0; q < featureQuartets; ++q)
+        TargetFeatureBufferUAV[duplicatedBase + q] = UniqueFeatureBuffer[uniqueBase + q];
 }

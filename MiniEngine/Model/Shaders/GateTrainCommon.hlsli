@@ -10,7 +10,7 @@
 #define BROADCAST_THREADGROUP_SIZE 1024
 
 // =========================================================================
-//   Network Configuration (8 -> 16 -> 4)
+//   Network Configuration
 // =========================================================================
 
 #define LAYER_COUNT 3
@@ -18,8 +18,12 @@
 #define HIDDEN_LAYER 1
 #define OUTPUT_LAYER 2
 
-#define MAX_NEURON_QUARTETS_PER_LAYER 4             // Max 16 neurons / 4
-#define ACTIVATION_QUARTETS_PER_NETWORK (2 + 4 + 1) // 8 inputs(2) + 16 hidden(4) + 4 outputs(1)
+// HLSL requires array bounds to be compile-time constants. 
+// We allocate the maximum possible memory for the dynamic arrays (8 quartets = 32 floats),
+// but at runtime, we only process up to the user-defined 'featureQuartets'.
+#define MAX_FEATURE_QUARTETS 8                      
+#define MAX_NEURON_QUARTETS_PER_LAYER 4             // Max 16 neurons / 4 floats per quartet
+#define ACTIVATION_QUARTETS_PER_NETWORK (MAX_FEATURE_QUARTETS + 4 + 1) // Dynamic Inputs + 16 hidden(4) + 4 outputs(1)
 
 #define LEAKY_RELU_SLOPE 0.01f
 #define FLOAT4_PACKING_CONSTANT 16384.0f            // Scale for fixed-point atomic addition
@@ -42,11 +46,6 @@ struct GlobalTriangle
     uint resolution;
     uint pointsPerTri;
     uint pad;
-};
-
-struct GateFeature
-{
-    float4 data[2];
 };
 
 struct GateEncodingData
@@ -79,8 +78,8 @@ cbuffer RootConstantsCB : register(b0)
     float aoRadius;
     uint uniqueVertexCount;
     float3 sunDirection;
-    uint featureQuartets;
-    uint mlpQuartets;
+    uint featureQuartets; // Dynamic size variable injected from C++ UI
+    uint mlpQuartets; // Dynamic size variable calculated in C++
 };
 #endif
 
@@ -89,7 +88,7 @@ cbuffer RootConstantsCB : register(b0)
 //   INFERENCE RESOURCES
 // -------------------------------------------------------------------------
 
-StructuredBuffer<GateFeature>       FeatureBuffer           : register(t0);
+StructuredBuffer<float4>            FeatureBuffer           : register(t0);
 StructuredBuffer<float4>            MLPParameterBuffer      : register(t1);
 StructuredBuffer<GlobalTriangle>    GlobalTriangleBuffer    : register(t2);
 Texture2D<float4>                   BindlessTextures[]      : register(t0, space1);
@@ -101,27 +100,28 @@ SamplerState                        LinearSampler           : register(s0);
 // -------------------------------------------------------------------------
 
 // --- SRVs (Read-Only) ---
-StructuredBuffer<GlobalTriangle>    GlobalTriangleBuffer    : register(t0);
-ByteAddressBuffer                   VertexUVBuffer          : register(t1);
-Texture2D<uint>                     VisibilityBuffer        : register(t2, space0);
-StructuredBuffer<uint>              VertexMappingBuffer     : register(t3); // TotalVertexID -> UniqueVertexID
-StructuredBuffer<GateFeature>       UniqueFeatureBuffer     : register(t4); // Unique features for Backprop
-RaytracingAccelerationStructure     SceneBVH                : register(t5);
+StructuredBuffer<GlobalTriangle> GlobalTriangleBuffer : register(t0);
+ByteAddressBuffer VertexUVBuffer : register(t1);
+Texture2D<uint> VisibilityBuffer : register(t2, space0);
+StructuredBuffer<uint> VertexMappingBuffer : register(t3);
+StructuredBuffer<float4> UniqueFeatureBuffer : register(t4);
+RaytracingAccelerationStructure SceneBVH : register(t5);
 
-SamplerState        LinearSampler       : register(s0);
-Texture2D<float4>   BindlessTextures[]  : register(t0, space1);
+SamplerState LinearSampler : register(s0);
+Texture2D<float4> BindlessTextures[] : register(t0, space1);
 
 // --- UAVs (Read/Write) ---
-// Features
-RWStructuredBuffer<GateFeature> DuplicatedFeatureBuffer : register(u0);
-RWStructuredBuffer<int4>        FeatureGradientBuffer   : register(u1);
-RWStructuredBuffer<AdamData>    FeatureAdamBuffer       : register(u2);
+// This is an alias buffer. In OptimizeFeatures it points to the Unique features.
+// In BroadcastFeatures, it points to the Duplicated features.
+RWStructuredBuffer<float4> TargetFeatureBufferUAV : register(u0);
+RWStructuredBuffer<int4> FeatureGradientBuffer : register(u1);
+RWStructuredBuffer<AdamData> FeatureAdamBuffer : register(u2);
 
 // MLP
-RWStructuredBuffer<float4>      MLPParameterBuffer  : register(u3);
-RWStructuredBuffer<int4>        MLPGradientBuffer   : register(u4);
-RWStructuredBuffer<AdamData>    MLPAdamBuffer       : register(u5);
-RWByteAddressBuffer             LossBuffer          : register(u6);
+RWStructuredBuffer<float4> MLPParameterBuffer : register(u3);
+RWStructuredBuffer<int4> MLPGradientBuffer : register(u4);
+RWStructuredBuffer<AdamData> MLPAdamBuffer : register(u5);
+RWByteAddressBuffer LossBuffer : register(u6);
 #endif
 
 // =========================================================================
@@ -143,6 +143,8 @@ float rand(inout uint rngState)
     return asfloat(0x3f800000 | (rngState >> 9)) - 1.0f;
 }
 
+// Convert back and forth between float4 and int4 for atomic thread-safe writes 
+// during the parallel backpropagation pass.
 float4 unpackFloat4(int4 x)
 {
     return float4(x) / FLOAT4_PACKING_CONSTANT;
@@ -157,7 +159,6 @@ int4 packFloat4(float4 x)
 //   Geometry & Grid Helpers
 // =========================================================================
 
-// Generalized analytical conversion of 2D indices to a 1D index
 uint get1DIndex(uint i, uint j, uint R)
 {
     return i * (R + 1) - i * (i - 1) / 2 + j;
@@ -168,7 +169,6 @@ void getMeshColorIndicesAndWeights(float3 barycentrics, uint R,
                                    out uint i1, out uint j1, out float w1,
                                    out uint i2, out uint j2, out float w2)
 {
-    // 1. SAFEGUARD AGAINST NEGATIVE BARYCENTRICS (Prevents GPU crashes)
     barycentrics = saturate(barycentrics);
     barycentrics /= (barycentrics.x + barycentrics.y + barycentrics.z);
 
@@ -177,7 +177,7 @@ void getMeshColorIndicesAndWeights(float3 barycentrics, uint R,
 
     int i = (int) floor(u_prime);
     if (i >= (int) R)
-        i = R - 1; // Safer boundary
+        i = R - 1;
 
     int j = (int) floor(v_prime);
     if (i + j >= (int) R)
@@ -210,11 +210,10 @@ void getMeshColorIndicesAndWeights(float3 barycentrics, uint R,
         j2 = j + 1;
         w2 = 1.0f - du;
         
-        // 2. SAFEGUARD AGAINST FLOAT INACCURACIES
         if (i0 + j0 > R)
         {
             i0 = i;
-            j0 = j; // Fallback to prevent out-of-bounds access
+            j0 = j;
         }
     }
 }
@@ -257,7 +256,7 @@ float4 activationFunctionOutputDeriv(float4 v)
 //   MLP Forward Layer (Inference / Optimized)
 // =========================================================================
 
-void evalLayer(inout float4 previousActivations[MAX_NEURON_QUARTETS_PER_LAYER], inout float4 currentActivations[MAX_NEURON_QUARTETS_PER_LAYER],
+void evalLayer(inout float4 previousActivations[MAX_FEATURE_QUARTETS], inout float4 currentActivations[MAX_FEATURE_QUARTETS],
     uint paramOffset, const uint neuronQuartetCountCurrentLayer, const uint neuronQuartetCountPreviousLayer, const uint layerType)
 {
     for (uint neuronQuartet = 0; neuronQuartet < neuronQuartetCountCurrentLayer; neuronQuartet++)
@@ -285,7 +284,7 @@ void evalLayer(inout float4 previousActivations[MAX_NEURON_QUARTETS_PER_LAYER], 
 
 void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint gradientIndex, float4 gradient)
 {
-    // Clip gradients to prevent exploding loss
+    // Clip gradients to prevent exploding loss (NaNs)
     gradient = clamp(gradient, -0.5f, 0.5f);
     const int4 packed = packFloat4(gradient);
     InterlockedAdd(gradientTarget[gradientIndex].x, packed.x);
@@ -296,27 +295,34 @@ void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint grad
 
 void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK])
 {
-    GateFeature f0 = UniqueFeatureBuffer[gateData.indices.x];
-    GateFeature f1 = UniqueFeatureBuffer[gateData.indices.y];
-    GateFeature f2 = UniqueFeatureBuffer[gateData.indices.z];
+    // Calculate flat array offsets for the three corner vertices
+    uint base0 = gateData.indices.x * featureQuartets;
+    uint base1 = gateData.indices.y * featureQuartets;
+    uint base2 = gateData.indices.z * featureQuartets;
 
-    activations[activationIndex++] = gateData.barycentrics.x * f0.data[0] + gateData.barycentrics.y * f1.data[0] + gateData.barycentrics.z * f2.data[0];
-    activations[activationIndex++] = gateData.barycentrics.x * f0.data[1] + gateData.barycentrics.y * f1.data[1] + gateData.barycentrics.z * f2.data[1];
+    // Loop through the dynamic number of feature quartets
+    for (uint q = 0; q < featureQuartets; ++q)
+    {
+        float4 f0 = UniqueFeatureBuffer[base0 + q];
+        float4 f1 = UniqueFeatureBuffer[base1 + q];
+        float4 f2 = UniqueFeatureBuffer[base2 + q];
+        
+        // Barycentric interpolation of the dynamic features
+        activations[activationIndex++] = gateData.barycentrics.x * f0 + gateData.barycentrics.y * f1 + gateData.barycentrics.z * f2;
+    }
 }
 
 void gateEncodingBackprop(const GateEncodingData gateData, inout float4 errors[ACTIVATION_QUARTETS_PER_NETWORK])
 {
-    float4 inputGrad0 = errors[0];
-    float4 inputGrad1 = errors[1];
-
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.x * 2 + 0, inputGrad0 * gateData.barycentrics.x);
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.x * 2 + 1, inputGrad1 * gateData.barycentrics.x);
-
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.y * 2 + 0, inputGrad0 * gateData.barycentrics.y);
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.y * 2 + 1, inputGrad1 * gateData.barycentrics.y);
-
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.z * 2 + 0, inputGrad0 * gateData.barycentrics.z);
-    accumulateGradient(FeatureGradientBuffer, gateData.indices.z * 2 + 1, inputGrad1 * gateData.barycentrics.z);
+    // Distribute the error back to the vertices dynamically based on barycentric weights
+    for (uint q = 0; q < featureQuartets; ++q)
+    {
+        float4 inputGrad = errors[q];
+        
+        accumulateGradient(FeatureGradientBuffer, gateData.indices.x * featureQuartets + q, inputGrad * gateData.barycentrics.x);
+        accumulateGradient(FeatureGradientBuffer, gateData.indices.y * featureQuartets + q, inputGrad * gateData.barycentrics.y);
+        accumulateGradient(FeatureGradientBuffer, gateData.indices.z * featureQuartets + q, inputGrad * gateData.barycentrics.z);
+    }
 }
 
 void evalLayerActivations(inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], uint weightOffset, uint prevNeuronOffset, uint currNeuronOffset, uint currQuartets, uint prevQuartets, uint layerType)
@@ -374,7 +380,6 @@ void backpropLayer(const float4 target, inout float4 activations[ACTIVATION_QUAR
     }
 }
 
-// Update signature to include currentValue, lr, and wd
 float4 ApplyAdam(float4 gradient, float4 currentValue, inout AdamData adamData, float lr, float wd)
 {
     adamData.stepCount += 1;
