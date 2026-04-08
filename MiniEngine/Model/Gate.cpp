@@ -234,8 +234,10 @@ namespace Sponza
             uint32_t pts = (r + 1) * (r + 2) / 2;
             precomputedBarycentrics[r].resize(pts);
             uint32_t idx = 0;
-            for (uint32_t i = 0; i <= r; ++i) {
-                for (uint32_t j = 0; j <= r - i; ++j) {
+            for (uint32_t i = 0; i <= r; ++i)
+            {
+                for (uint32_t j = 0; j <= r - i; ++j)
+                {
                     uint32_t k = r - i - j;
                     precomputedBarycentrics[r][idx++] = { (float)i / r, (float)j / r, (float)k / r };
                 }
@@ -340,18 +342,14 @@ namespace Sponza
         uint32_t totalFeatureFloats = m_TotalMeshColorPoints * m_FeatureQuartets;
         std::vector<DirectX::XMFLOAT4> duplicatedFeatures(totalFeatureFloats);
         for (uint32_t i = 0; i < totalFeatureFloats; ++i)
-        {
             duplicatedFeatures[i] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-        }
         m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalFeatureFloats, sizeof(DirectX::XMFLOAT4), duplicatedFeatures.data());
 
         // B. UNIQUE BUFFERS
         uint32_t uniqueFeatureFloats = m_UniqueSpatialVertexCount * m_FeatureQuartets;
         std::vector<DirectX::XMFLOAT4> uniqueFeatures(uniqueFeatureFloats);
         for (uint32_t i = 0; i < uniqueFeatureFloats; ++i)
-        {
             uniqueFeatures[i] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-        }
         m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", uniqueFeatureFloats, sizeof(DirectX::XMFLOAT4), uniqueFeatures.data());
 
         std::vector<AdamData> initialFeatureAdam(uniqueFeatureFloats, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
