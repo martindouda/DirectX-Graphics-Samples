@@ -139,6 +139,7 @@ void Sponza::Startup(Camera& Camera)
     m_CutoutModelPSO.Finalize();
 
     ASSERT(m_Model.Load(L"Sponza/sponza.h3d"), "Failed to load model");
+    //ASSERT(m_Model.Load(L"StanfordBunny/Bunny.h3d"), "Failed to load model");
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
 
 
