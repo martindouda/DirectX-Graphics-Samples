@@ -96,14 +96,16 @@ namespace Sponza
 
         // --- Hyperparameters & Training Configuration ---
         bool     m_IsTrainingPaused = true;
-        uint32_t m_TrainingStep = 8;
+        uint32_t m_TrainingStep = 1;
         uint32_t m_Resolution = 8;
-        int      m_DesiredResolution = 1;        // For UI
+        int      m_DesiredResolution = 0;        // For UI
         uint32_t m_PointsPerTri = 0;
+        bool     m_UseMaxTriangleArea = true;
+        bool     m_DesiredUseMaxTriangleArea = true;
 
         // Add to your Hyperparameters section:
-        uint32_t m_DesiredFeatureFloats = 4; // For UI
         uint32_t m_FeatureFloats = 4;
+        uint32_t m_DesiredFeatureFloats = 0; // For UI
         uint32_t m_FeatureQuartets = 1;
 
         // Add to track dynamic MLP size:

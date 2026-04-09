@@ -101,12 +101,19 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float3 p2 = asfloat(VertexUVBuffer.Load3(origTri.i2 * VertexStride));
 
     float3 worldPos = barycentrics.x * p0 + barycentrics.y * p1 + barycentrics.z * p2;
-    float3 faceNormal = normalize(cross(p1 - p0, p2 - p0));
+
+    // 1. Load the Vertex Normals (Offset by 20 bytes)
+    float3 n0 = asfloat(VertexUVBuffer.Load3(origTri.i0 * VertexStride + 20));
+    float3 n1 = asfloat(VertexUVBuffer.Load3(origTri.i1 * VertexStride + 20));
+    float3 n2 = asfloat(VertexUVBuffer.Load3(origTri.i2 * VertexStride + 20));
+
+    // 2. Interpolate them using the barycentric weights to get perfectly smooth curves
+    float3 smoothNormal = normalize(barycentrics.x * n0 + barycentrics.y * n1 + barycentrics.z * n2);
 
     // --- DXR Inline Ray Tracing (Ground Truth Generation) ---
     // 1. Trace a directional ray towards the sun for hard shadows
     RayDesc shadowRay;
-    shadowRay.Origin = worldPos + faceNormal * 0.05f;
+    shadowRay.Origin = worldPos + smoothNormal * 0.05f;
     shadowRay.Direction = sunDirection;
     shadowRay.TMin = 0.0f;
     shadowRay.TMax = 10000.0f;
@@ -119,13 +126,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
     // 2. Trace a random cosine-weighted ray for Ambient Occlusion
     float u3 = rand(rng);
     float u4 = rand(rng);
-    float3 aoDirection = getCosineHemisphereSample(u3, u4, faceNormal);
+    float3 aoDirection = getCosineHemisphereSample(u3, u4, smoothNormal);
 
     RayDesc aoRay;
-    aoRay.Origin = worldPos + faceNormal * 0.05f; 
+    aoRay.Origin = worldPos + smoothNormal * 0.05f;
     aoRay.Direction = aoDirection;                
     aoRay.TMin = 0.0f;
-    aoRay.TMax = aoRadius;                        
+    aoRay.TMax = aoRadius;                
 
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qAO;
     qAO.TraceRayInline(SceneBVH, 0, 0xFF, aoRay);

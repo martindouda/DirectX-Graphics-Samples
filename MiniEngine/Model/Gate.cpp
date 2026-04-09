@@ -96,8 +96,7 @@ namespace Sponza
         m_TrainingStep = 1;
 
         m_Resolution = m_DesiredResolution;
-
-        // Calculate required float4s (Ceiling division: (Floats + 3) / 4)
+        m_UseMaxTriangleArea = m_DesiredUseMaxTriangleArea;
         m_FeatureFloats = m_DesiredFeatureFloats;
         m_FeatureQuartets = (m_FeatureFloats + 3) / 4;
 
@@ -131,6 +130,10 @@ namespace Sponza
 
     void Gate::BuildSpatialIndex()
     {
+        m_DesiredResolution = m_Resolution;
+        m_DesiredFeatureFloats = m_FeatureFloats;
+        m_DesiredUseMaxTriangleArea = m_UseMaxTriangleArea; // Sync state
+
         auto tStart = std::chrono::high_resolution_clock::now();
 
         uint32_t vertexStride = m_Model->GetVertexStride();
@@ -143,14 +146,18 @@ namespace Sponza
         const unsigned char* rawVertexData = m_Model->GetVertexData();
         const unsigned char* rawIndexData = m_Model->GetIndexData();
 
-        // --- 1A. PASS 1: Calculate areas and find the scene's maximum average area ---
+        // --- 1A. PASS 1: Calculate BOTH Average and Max areas ---
+        std::vector<float> meshMaxAreas(numMeshes, 0.0f);
         std::vector<float> meshAvgAreas(numMeshes, 0.0f);
-        float maxAvgArea = 0.0f;
+        float globalMaxArea = 0.0f;
+        float globalMaxAvgArea = 0.0f;
 
         for (uint32_t i = 0; i < numMeshes; ++i)
         {
             const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
             uint32_t triCount = mesh.indexCount / 3;
+
+            float maxTriArea = 0.0f;
             float totalArea = 0.0f;
 
             uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
@@ -168,25 +175,35 @@ namespace Sponza
 
                 // Area = 0.5 * length(cross(p1-p0, p2-p0))
                 DirectX::XMVECTOR cross = DirectX::XMVector3Cross(DirectX::XMVectorSubtract(p1, p0), DirectX::XMVectorSubtract(p2, p0));
-                totalArea += DirectX::XMVectorGetX(DirectX::XMVector3Length(cross)) * 0.5f;
+                float triArea = DirectX::XMVectorGetX(DirectX::XMVector3Length(cross)) * 0.5f;
+
+                totalArea += triArea;
+
+                if (triArea > maxTriArea)
+                    maxTriArea = triArea;
             }
 
+            // Store MAX metrics
+            meshMaxAreas[i] = maxTriArea;
+            if (maxTriArea > globalMaxArea)
+                globalMaxArea = maxTriArea;
+
+            // Store AVG metrics
             float avgArea = totalArea / (float)triCount;
             meshAvgAreas[i] = avgArea;
-
-            if (avgArea > maxAvgArea)
-                maxAvgArea = avgArea;
+            if (avgArea > globalMaxAvgArea)
+                globalMaxAvgArea = avgArea;
         }
 
-        // --- 1B. PASS 2: Assign uniform-density resolutions and prefix sums ---
+        // --- 1B. PASS 2: Assign uniform-density resolutions ---
         uint32_t currentGlobalPointOffset = 0;
         std::vector<GlobalTriangle> globalTris;
 
-        // 1. Replace the hardcoded 16 with the dynamically controlled m_Resolution
         const uint32_t MAX_RES = m_Resolution;
 
-        // Prevent division by zero if the scene is completely empty
-        if (maxAvgArea == 0.0f) maxAvgArea = 1.0f;
+        // Prevent division by zero
+        if (globalMaxArea == 0.0f) globalMaxArea = 1.0f;
+        if (globalMaxAvgArea == 0.0f) globalMaxAvgArea = 1.0f;
 
         for (uint32_t i = 0; i < numMeshes; ++i)
         {
@@ -194,10 +211,14 @@ namespace Sponza
             const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
             uint32_t triCount = mesh.indexCount / 3;
 
-            // Calculate R based on constant density formula
-            float areaRatio = meshAvgAreas[i] / maxAvgArea;
+            // SWITCH: Calculate ratio based on user's selected mode
+            float areaRatio = 0.0f;
+            if (m_UseMaxTriangleArea)
+                areaRatio = meshMaxAreas[i] / globalMaxArea;
+            else
+                areaRatio = meshAvgAreas[i] / globalMaxAvgArea;
 
-            // Map the ratio directly to the new dynamic max resolution
+            // Map the ratio directly to the dynamic max resolution
             uint32_t meshRes = static_cast<uint32_t>(std::round((float)MAX_RES * std::sqrt(areaRatio)));
 
             // Clamp strictly between 1 and MAX_RES
@@ -205,6 +226,7 @@ namespace Sponza
 
             uint32_t meshPtsPerTri = (meshRes + 1) * (meshRes + 2) / 2;
 
+            // ... (The rest of the function remains exactly the same starting from the inner loop)
             for (uint32_t t = 0; t < triCount; ++t)
             {
                 GlobalTriangle gt;
@@ -338,6 +360,8 @@ namespace Sponza
 
     void Gate::AllocateBuffers()
     {
+        srand(1337);
+
         // A. DUPLICATED BUFFER
         uint32_t totalFeatureFloats = m_TotalMeshColorPoints * m_FeatureQuartets;
         std::vector<DirectX::XMFLOAT4> duplicatedFeatures(totalFeatureFloats);
@@ -354,7 +378,8 @@ namespace Sponza
 
         std::vector<AdamData> initialFeatureAdam(uniqueFeatureFloats, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", uniqueFeatureFloats, sizeof(AdamData), initialFeatureAdam.data());
-        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", uniqueFeatureFloats, sizeof(DirectX::XMINT4), nullptr);
+        std::vector<DirectX::XMINT4> zeroFeatureGradients(uniqueFeatureFloats, { 0, 0, 0, 0 });
+        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", uniqueFeatureFloats, sizeof(DirectX::XMINT4), zeroFeatureGradients.data());
 
         // C. MLP PARAMETERS (Dynamic Calculation)
         m_MlpParameterCount = (16 * (m_FeatureQuartets * 4) + 16) + 68;
@@ -363,10 +388,9 @@ namespace Sponza
         std::vector<float> initialWeights(m_MlpParameterCount);
         for (uint32_t i = 0; i < m_MlpParameterCount; ++i)
             initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
-
-        // --- CHANGED: Use m_MlpQuartets and XMFLOAT4/XMINT4 for the stride! ---
         m_GateMLPBuffer.Create(L"MLP Parameters", m_MlpQuartets, sizeof(DirectX::XMFLOAT4), initialWeights.data());
-        m_GateMLPGradientBuffer.Create(L"MLP Gradients", m_MlpQuartets, sizeof(DirectX::XMINT4), nullptr);
+        std::vector<DirectX::XMINT4> zeroMlpGradients(m_MlpQuartets, { 0, 0, 0, 0 });
+        m_GateMLPGradientBuffer.Create(L"MLP Gradients", m_MlpQuartets, sizeof(DirectX::XMINT4), zeroMlpGradients.data());
 
         std::vector<AdamData> initialMLPAdam(m_MlpQuartets, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
         m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", m_MlpQuartets, sizeof(AdamData), initialMLPAdam.data());
@@ -379,7 +403,7 @@ namespace Sponza
         m_GateRootSig[0].InitAsConstantBuffer(0); // b0
         m_GateRootSig[1].InitAsBufferSRV(0);      // t0 (FeatureBuffer)
         m_GateRootSig[2].InitAsBufferSRV(1);      // t1 (MLP)
-        m_GateRootSig[3].InitAsConstants(1, 10);   // b1 (Inference Constants)
+        m_GateRootSig[3].InitAsConstants(1, 16);   // b1 (Inference Constants)
         m_GateRootSig[4].InitAsBufferSRV(2);      // t2 (GlobalTriangleBuffer)
         m_GateRootSig[5].InitAsDescriptorTable(1);
         m_GateRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
@@ -659,6 +683,10 @@ namespace Sponza
 
             uint32_t featureFloats;
             uint32_t featureQuartets;
+            float pad[2];
+
+            DirectX::XMFLOAT3 cameraPos;
+            float pad2;
         };
 
         auto cmdList = gfxContext.GetCommandList();
@@ -683,11 +711,13 @@ namespace Sponza
             cb.renderFlags = flags;
             cb.materialIdx = mesh.materialIndex;
 
+            cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
+            cb.sunIntensity = sunIntensity;
+
 			cb.featureFloats = m_FeatureFloats;
 			cb.featureQuartets = m_FeatureQuartets;
 
-            cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
-            cb.sunIntensity = sunIntensity;
+            cb.cameraPos = DirectX::XMFLOAT3(camera.GetPosition().GetX(), camera.GetPosition().GetY(), camera.GetPosition().GetZ());
 
             gfxContext.SetConstantArray(3, sizeof(InferenceConstants) / 4, &cb);
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
@@ -769,11 +799,13 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
-        ImGui::SliderInt("Max Resolution Scale", &m_DesiredResolution, 1, 512);
+        ImGui::SliderInt("Max Resolution Scale", &m_DesiredResolution, 1, 512, "%d", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderInt("Feature Dimension (Floats)", (int*)&m_DesiredFeatureFloats, 1, 32);
+        ImGui::Checkbox("Use Max Triangle Area (Off = Average)", &m_DesiredUseMaxTriangleArea);
 
-        // Update the condition to check BOTH variables
-        if (m_DesiredResolution != (int)m_Resolution || m_DesiredFeatureFloats != m_FeatureFloats)
+        if (m_DesiredResolution != (int)m_Resolution ||
+            m_DesiredFeatureFloats != m_FeatureFloats ||
+            m_DesiredUseMaxTriangleArea != m_UseMaxTriangleArea)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Architecture changed! Reset training to apply.");
 
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))

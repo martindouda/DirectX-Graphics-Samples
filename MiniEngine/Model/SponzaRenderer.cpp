@@ -139,7 +139,8 @@ void Sponza::Startup(Camera& Camera)
     m_CutoutModelPSO.Finalize();
 
     ASSERT(m_Model.Load(L"Sponza/sponza.h3d"), "Failed to load model");
-    //ASSERT(m_Model.Load(L"StanfordBunny/Bunny.h3d"), "Failed to load model");
+    //ASSERT(m_Model.Load(L"StanfordDragon/Dragon.h3d"), "Failed to load model");
+    //ASSERT(m_Model.Load(L"Table/Table.h3d"), "Failed to load model");
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
 
 
@@ -154,13 +155,9 @@ void Sponza::Startup(Camera& Camera)
         if (std::string(mat.texDiffusePath).find("thorn") != std::string::npos ||
             std::string(mat.texDiffusePath).find("plant") != std::string::npos ||
             std::string(mat.texDiffusePath).find("chain") != std::string::npos)
-        {
             m_pMaterialIsCutout[i] = true;
-        }
         else
-        {
             m_pMaterialIsCutout[i] = false;
-        }
     }
 
     float modelRadius = Length(m_Model.GetBoundingBox().GetDimensions()) * 0.5f;
