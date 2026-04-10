@@ -93,6 +93,11 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         
         return float4(lerp(baseColor, lineColor, lineIntensity), 1.0f);
     }
+    if (lightingMode == 5)
+    {
+        float3 predictedColor = saturate(activationsA[0].xyz);
+        return float4(predictedColor, 1.0f);
+    }
 
     float networkShadow = saturate(activationsA[0].x); 
     float networkAO     = saturate(activationsA[0].y); 

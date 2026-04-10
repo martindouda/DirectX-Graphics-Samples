@@ -819,26 +819,23 @@ namespace Sponza
         ImGui::SliderFloat("AO Radius", &m_AoRadius, 10.0f, 1000.0f, "%.1f");
 
         // --- SMART UI LOGIC ---
-
-        const char* learningModes[] = { "Learn AO + Shadows", "Learn AO Only", "Learn Shadows Only" };
+        const char* learningModes[] = { "Learn AO + Shadows", "Learn AO Only", "Learn Shadows Only", "Learn Color (RGB Test)" };
         if (ImGui::Combo("Learning Target", &m_LearningMode, learningModes, IM_ARRAYSIZE(learningModes)))
         {
             if (m_LearningMode == 1 && (m_LightingMode == 2 || m_LightingMode == 3)) m_LightingMode = 1;
             else if (m_LearningMode == 2 && (m_LightingMode == 1 || m_LightingMode == 3)) m_LightingMode = 2;
+            else if (m_LearningMode == 3) m_LightingMode = 5; // Snap to the new Network RGB view
         }
 
-        // 1. ADD THE 5TH OPTION HERE
-        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows", "Debug: Subdivision Grid" };
-
+        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows", "Debug: Subdivision Grid", "Network RGB" };
         if (ImGui::BeginCombo("Viewing Mode", lightingModes[m_LightingMode]))
         {
-            // 2. CHANGE THE LOOP LIMIT TO 5
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 6; i++)
             {
                 bool isValid = true;
-                if (m_LearningMode == 1 && (i == 2 || i == 3)) isValid = false;
-                if (m_LearningMode == 2 && (i == 1 || i == 3)) isValid = false;
-                // Note: i == 4 (Debug) is unconditionally true!
+                if (m_LearningMode == 1 && (i == 2 || i == 3 || i == 5)) isValid = false;
+                if (m_LearningMode == 2 && (i == 1 || i == 3 || i == 5)) isValid = false;
+                if (m_LearningMode == 3 && (i >= 0 && i <= 3)) isValid = false; // When learning color, hide AO/Shadow views
 
                 if (isValid)
                 {

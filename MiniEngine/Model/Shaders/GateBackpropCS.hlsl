@@ -157,15 +157,35 @@ void main(uint3 DTid : SV_DispatchThreadID)
     evalLayerActivations(activations, hiddenOffset, 0,               featureQuartets,     4, featureQuartets, HIDDEN_LAYER);      
     evalLayerActivations(activations, outputOffset, featureQuartets, featureQuartets + 4, 1, 4,               OUTPUT_LAYER);      
 
-    // Target format: (Shadow, AO, unused, unused)
     float targetShadow = isShadowed ? 0.0f : 1.0f;
     float targetAO = isOccluded ? 0.0f : 1.0f;
-
     float4 targetInput = float4(targetShadow, targetAO, 0.0f, 0.0f);
-    if (learningMode == 1)
+    
+    if (learningMode == 1) // AO only
         targetInput.x = activations[featureQuartets + 4].x; // Ignore Shadows
     else if (learningMode == 2) // Shadows Only
         targetInput.y = activations[featureQuartets + 4].y; // Ignore AO
+    else if (learningMode == 3) // LEARN COLOR (RGB)
+    {
+        // 1. Fetch exact UVs and sample the Albedo
+        float2 uv0 = asfloat(VertexUVBuffer.Load2(origTri.i0 * VertexStride + uvOffset));
+        float2 uv1 = asfloat(VertexUVBuffer.Load2(origTri.i1 * VertexStride + uvOffset));
+        float2 uv2 = asfloat(VertexUVBuffer.Load2(origTri.i2 * VertexStride + uvOffset));
+        
+        float2 pixelUV = barycentrics.x * uv0 + barycentrics.y * uv1 + barycentrics.z * uv2;
+        float3 albedo = BindlessTextures[origTri.materialIdx * 6 + 0].SampleLevel(LinearSampler, pixelUV, 0).rgb;
+        
+        // 2. Calculate true surface Radiance (incorporating the ground-truth rays)
+        float NdotL = saturate(dot(smoothNormal, sunDirection));
+        
+        // Note: 4.0f is the default sunIntensity from your C++ EngineTuning variables
+        float3 directLight = albedo * NdotL * targetShadow * 4.0f; 
+        float3 ambientLight = albedo * targetAO * 0.1f; // 0.1f is the Sponza ambient floor
+        
+        // 3. Set the combined outgoing light as the network's target
+        targetInput.xyz = saturate(directLight + ambientLight);
+        targetInput.w = activations[featureQuartets + 4].w;
+    }
 
     // Evaluate Backward Pass
     float4 errors[ACTIVATION_QUARTETS_PER_NETWORK];
@@ -175,7 +195,20 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     // Loss Accumulation for GUI visualization
     float2 diff = targetInput.xy - activations[featureQuartets + 4].xy; 
-    float pixelLoss = dot(diff, diff) * 0.5f; 
+    float pixelLoss = 0.0f;
+    
+    if (learningMode == 3)
+    {
+        // Calculate RGB error (3 channels)
+        float3 diffRGB = targetInput.xyz - activations[featureQuartets + 4].xyz;
+        pixelLoss = dot(diffRGB, diffRGB) * 0.333f; // Average across 3 channels
+    }
+    else
+    {
+        // Calculate Shadow/AO error (2 channels)
+        float2 diff2 = targetInput.xy - activations[featureQuartets + 4].xy; 
+        pixelLoss = dot(diff2, diff2) * 0.5f; // Average across 2 channels
+    }
     
     LossBuffer.InterlockedAdd(0, (uint)(pixelLoss * 1000.0f));
 }
