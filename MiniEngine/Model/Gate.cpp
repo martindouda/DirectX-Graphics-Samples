@@ -32,9 +32,6 @@ extern Microsoft::WRL::ComPtr<ID3D12Resource> g_bvh_topLevelAccelerationStructur
 
 namespace Sponza
 {
-    extern NumVar m_SunOrientation;
-    extern NumVar m_SunInclination;
-    extern ExpVar m_SunLightIntensity;
     // =========================================================================
     // Constructor & Destructor
     // =========================================================================
@@ -431,7 +428,7 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(15, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 22); // register(b0)
+        m_GateTrainRootSig[0].InitAsConstants(0, 24); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
 
@@ -527,13 +524,15 @@ namespace Sponza
             uint32_t featureFloats;
             uint32_t featureQuartets;
             uint32_t mlpQuartets;
+            uint32_t learningMode;
+            float maxGradientClip;
         } cb = {
             m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
             m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
             m_TotalMeshColorPoints, m_AoRadius, m_UniqueSpatialVertexCount,
             DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()),
-			m_FeatureFloats, m_FeatureQuartets, m_MlpQuartets
+			m_FeatureFloats, m_FeatureQuartets, m_MlpQuartets,  m_LearningMode, m_MaxGradientClip
         };
         trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
 
@@ -702,8 +701,8 @@ namespace Sponza
 
             // 2. Pack our booleans into the flags variable
             uint32_t flags = 0;
-            if (m_TexturelessView)         flags |= (1 << 0); // Set 1st bit
-            if (m_DisableDirectionalLight) flags |= (1 << 1); // Set 2nd bit
+            if (m_TexturesEnabled)         flags |= (1 << 0); // Set 1st bit
+            if (m_DirectionalLightEnabled) flags |= (1 << 1); // Set 2nd bit
 
             InferenceConstants cb;
             cb.globalTriangleOffset = globalTriangleOffset;
@@ -737,7 +736,7 @@ namespace Sponza
 
     void Gate::RenderGUI()
     {
-        // --- 1. READ GPU TIMESTAMPS (from previous frame) ---
+        // --- READ GPU TIMESTAMPS (from previous frame) ---
         uint64_t* timestamps = nullptr;
         if (m_GpuTimerReadback && SUCCEEDED(m_GpuTimerReadback->Map(0, nullptr, (void**)&timestamps)))
         {
@@ -764,7 +763,7 @@ namespace Sponza
             m_GpuTimerReadback->Unmap(0, nullptr);
         }
 
-        // --- 2. RENDER IMGUI ---
+        // --- RENDER IMGUI ---
         ImGui::Begin("GATE Training Configuration");
 
         ImGui::Spacing();
@@ -783,24 +782,24 @@ namespace Sponza
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::Text("Environment Lighting");
-        static float sunOri = -0.5f;
-        static float sunInc = 0.75f;
-        static float sunInt = 4.0f;
-        if (ImGui::SliderFloat("Sun Orientation", &sunOri, -3.14159f, 3.14159f, "%.3f rad"))
-            m_SunOrientation = sunOri;
-        if (ImGui::SliderFloat("Sun Inclination", &sunInc, 0.0f, 1.0f, "%.3f"))
-            m_SunInclination = sunInc;
-        if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 16.0f, "%.2f"))
-            m_SunLightIntensity = sunInt;
+        ImGui::Text("Training Loss (MSE)"); // Mean Squared Error
+        float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
+        char overlay[32];
+        sprintf_s(overlay, "Loss: %.5f", currentLoss);
+        float maxLoss = *std::max_element(m_LossHistory.begin(), m_LossHistory.end());
+        float graphMax = std::max(maxLoss * 1.2f, 0.001f);
+        float graphHeight = 120.f;
+        ImGui::PlotLines("##LossGraph", m_LossHistory.data(), MAX_LOSS_HISTORY, m_LossHistoryOffset, overlay,
+            0.0f, graphMax, ImVec2(ImGui::GetContentRegionAvail().x, graphHeight));
         ImGui::Spacing();
 
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
-        ImGui::SliderInt("Max Resolution Scale", &m_DesiredResolution, 1, 512, "%d", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderInt("Feature Dimension (Floats)", (int*)&m_DesiredFeatureFloats, 1, 32);
+        ImGui::InputInt("Max Resolution Scale", &m_DesiredResolution, 1);
+        m_DesiredResolution = std::max(1, std::min(m_DesiredResolution, 1024));
+        ImGui::SliderInt("Feature Dimension", (int*)&m_DesiredFeatureFloats, 1, 32);
         ImGui::Checkbox("Use Max Triangle Area (Off = Average)", &m_DesiredUseMaxTriangleArea);
 
         if (m_DesiredResolution != (int)m_Resolution ||
@@ -818,32 +817,54 @@ namespace Sponza
         ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 1024, "%d Groups * 1024 Threads");
         ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("AO Radius", &m_AoRadius, 10.0f, 1000.0f, "%.1f");
-        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows" };
-        ImGui::Combo("Lighting Mode", &m_LightingMode, lightingModes, IM_ARRAYSIZE(lightingModes));
-        ImGui::Checkbox("Textureless View (Clay Render)", &m_TexturelessView);
-        ImGui::Checkbox("Disable Directional Light", &m_DisableDirectionalLight); // Add this
+
+        // --- SMART UI LOGIC ---
+
+        const char* learningModes[] = { "Learn AO + Shadows", "Learn AO Only", "Learn Shadows Only" };
+        if (ImGui::Combo("Learning Target", &m_LearningMode, learningModes, IM_ARRAYSIZE(learningModes)))
+        {
+            if (m_LearningMode == 1 && (m_LightingMode == 2 || m_LightingMode == 3)) m_LightingMode = 1;
+            else if (m_LearningMode == 2 && (m_LightingMode == 1 || m_LightingMode == 3)) m_LightingMode = 2;
+        }
+
+        // 1. ADD THE 5TH OPTION HERE
+        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows", "Debug: Subdivision Grid" };
+
+        if (ImGui::BeginCombo("Viewing Mode", lightingModes[m_LightingMode]))
+        {
+            // 2. CHANGE THE LOOP LIMIT TO 5
+            for (int i = 0; i < 5; i++)
+            {
+                bool isValid = true;
+                if (m_LearningMode == 1 && (i == 2 || i == 3)) isValid = false;
+                if (m_LearningMode == 2 && (i == 1 || i == 3)) isValid = false;
+                // Note: i == 4 (Debug) is unconditionally true!
+
+                if (isValid)
+                {
+                    bool isSelected = (m_LightingMode == i);
+                    if (ImGui::Selectable(lightingModes[i], isSelected))
+                        m_LightingMode = i;
+
+                    if (isSelected) ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        // Add a helpful UI note so the user knows why the dropdown is restricted
+        if (m_LearningMode != 0)
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "* Viewing mode restricted to active learning target.");
+
+        ImGui::Checkbox("Textures Enabled", &m_TexturesEnabled);
+        ImGui::Checkbox("Directional Light Enabled", &m_DirectionalLightEnabled);
         ImGui::Spacing();
 
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::SliderFloat("Learning Rate", &m_GlobalLearningRate, 0.0001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("Features/MLP Ratio", &m_LearningRateRatio, 0.0f, 1.0f, "%.2f");
-        ImGui::Spacing();
-
-        ImGui::Separator();
-        ImGui::Spacing();
-        ImGui::Text("Training Loss (MSE)"); // Mean Squared Error
-
-        float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
-        char overlay[32];
-        sprintf_s(overlay, "Loss: %.5f", currentLoss);
-
-        float maxLoss = *std::max_element(m_LossHistory.begin(), m_LossHistory.end());
-        float graphMax = std::max(maxLoss * 1.2f, 0.001f);
-        float graphHeight = 120.f;
-
-        ImGui::PlotLines("##LossGraph", m_LossHistory.data(), MAX_LOSS_HISTORY, m_LossHistoryOffset, overlay,
-            0.0f, graphMax, ImVec2(ImGui::GetContentRegionAvail().x, graphHeight));
+        ImGui::SliderFloat("Max Gradient Clip", &m_MaxGradientClip, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic);
         ImGui::Spacing();
 
         ImGui::End();

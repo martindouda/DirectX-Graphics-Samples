@@ -78,6 +78,22 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     evalLayer(activationsA, activationsB, 0,                 4, featureQuartets, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, outputLayerOffset, 1, 4,               OUTPUT_LAYER);
 
+    // Procedural subdivision wireframe
+    if (lightingMode == 4)
+    {
+        float3 gridCoord = barycentrics * localRes;
+        float3 fw = fwidth(gridCoord); // Pixel thick regardless of how close/far the camera is
+        
+        float3 distToLine = abs(gridCoord - round(gridCoord));
+        float3 edge = distToLine / fw;
+        float edgeFactor = min(edge.x, min(edge.y, edge.z));
+        float lineIntensity = 1.0f - saturate(edgeFactor - 0.5f);
+        float3 baseColor = float3(0.1f, 0.1f, 0.12f); 
+        float3 lineColor = float3(0.0f, 1.0f, 0.5f); 
+        
+        return float4(lerp(baseColor, lineColor, lineIntensity), 1.0f);
+    }
+
     float networkShadow = saturate(activationsA[0].x); 
     float networkAO     = saturate(activationsA[0].y); 
     
@@ -87,8 +103,8 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     if (lightingMode == 1 || lightingMode == 3) aoMask = networkAO;
     if (lightingMode == 2 || lightingMode == 3) shadowMask = networkShadow;
     
-    bool useTexturelessView      = (renderFlags & (1 << 0)) != 0;
-    bool disableDirectionalLight = (renderFlags & (1 << 1)) != 0;
+    bool useTexturelessView      = (renderFlags & (1 << 0)) == 0;
+    bool disableDirectionalLight = (renderFlags & (1 << 1)) == 0;
 
     // --- TEXTURE SAMPLING ---
     float4 albedo = BindlessTextures[materialIdx * 6 + 0].Sample(LinearSampler, input.UV);

@@ -79,8 +79,10 @@ cbuffer RootConstantsCB : register(b0)
     uint uniqueVertexCount;
     float3 sunDirection;
     uint featureFloats;
-    uint featureQuartets; // Dynamic size variable injected from C++ UI
-    uint mlpQuartets; // Dynamic size variable calculated in C++
+    uint featureQuartets;
+    uint mlpQuartets;
+    uint learningMode;
+    float maxGradientClip;
 };
 #endif
 

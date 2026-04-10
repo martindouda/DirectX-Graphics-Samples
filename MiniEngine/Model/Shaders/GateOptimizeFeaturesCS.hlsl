@@ -20,6 +20,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         return;
 
     float4 gradient = unpackFloat4(packedGradient);
+    gradient = clamp(gradient, -maxGradientClip, maxGradientClip);
     AdamData adam = FeatureAdamBuffer[index];
     
     float4 currentFeature = TargetFeatureBufferUAV[index];

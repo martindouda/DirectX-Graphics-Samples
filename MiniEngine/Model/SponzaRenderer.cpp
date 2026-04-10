@@ -108,7 +108,7 @@ void Sponza::Startup(Camera& Camera)
     // Depth-only shading but with alpha testing
     m_CutoutDepthPSO = m_DepthPSO;
     m_CutoutDepthPSO.SetPixelShader(g_pCutoutDepthPS, sizeof(g_pCutoutDepthPS));
-    m_CutoutDepthPSO.SetRasterizerState(RasterizerTwoSided);
+    m_CutoutDepthPSO.SetRasterizerState(RasterizerDefault);
     m_CutoutDepthPSO.Finalize();
 
     // Depth-only but with a depth bias and/or render only backfaces
@@ -164,7 +164,7 @@ void Sponza::Startup(Camera& Camera)
     const Vector3 eye = m_Model.GetBoundingBox().GetCenter() + Vector3(modelRadius * 0.5f, 0.0f, 0.0f);
     Camera.SetEyeAtUp( eye, Vector3(kZero), Vector3(kYUnitVector) );
 
-    Lighting::CreateRandomLights(m_Model.GetBoundingBox().GetMin(), m_Model.GetBoundingBox().GetMax());
+    //Lighting::CreateRandomLights(m_Model.GetBoundingBox().GetMin(), m_Model.GetBoundingBox().GetMax());
 }
 
 const ModelH3D& Sponza::GetModel()

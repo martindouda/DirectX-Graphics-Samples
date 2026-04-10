@@ -60,7 +60,8 @@ namespace Sponza
 
         inline void SetIsTrainingPaused(bool isTrainingPaused) { m_IsTrainingPaused = isTrainingPaused; }
         inline bool GetIsTrainingPaused() const { return m_IsTrainingPaused; }
-
+		inline void SetTexturesEnabled(bool enabled) { m_TexturesEnabled = enabled; }
+		inline bool GetTexturesEnabled() const { return m_TexturesEnabled; }
     private:
         // --- Initialization Helpers ---
         void BuildSpatialIndex();
@@ -100,8 +101,9 @@ namespace Sponza
         uint32_t m_Resolution = 8;
         int      m_DesiredResolution = 0;        // For UI
         uint32_t m_PointsPerTri = 0;
-        bool     m_UseMaxTriangleArea = true;
-        bool     m_DesiredUseMaxTriangleArea = true;
+        bool     m_UseMaxTriangleArea = false;
+        bool     m_DesiredUseMaxTriangleArea = false;
+        int      m_LearningMode = 0;
 
         // Add to your Hyperparameters section:
         uint32_t m_FeatureFloats = 4;
@@ -115,6 +117,7 @@ namespace Sponza
         int      m_BackpropDispatchedGroups = 1024; // * 1024 triangles per step
         float    m_GlobalLearningRate = 0.1f;
         float    m_LearningRateRatio = 0.5f;
+        float    m_MaxGradientClip = 1.0f;
         float    m_AdamEpsilon = 1e-8f;
         float    m_AdamBeta1 = 0.9f;
         float    m_AdamBeta2 = 0.999f;
@@ -122,8 +125,8 @@ namespace Sponza
         float    m_ScreenSpaceRatio = 0.85f;
         float    m_AoRadius = 150.0f;
         int      m_LightingMode = 3; // 0 = None, 1 = AO Only, 2 = Shadows Only, 3 = Both
-        bool     m_TexturelessView = false;
-        bool     m_DisableDirectionalLight = false;
+        bool     m_TexturesEnabled = true;
+        bool     m_DirectionalLightEnabled = true;
 
         // --- GPU Resources: Geometry & Features ---
         StructuredBuffer  m_GlobalTriangleBuffer;

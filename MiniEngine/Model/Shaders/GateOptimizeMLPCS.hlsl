@@ -15,6 +15,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         return; 
 
     float4 gradient = unpackFloat4(MLPGradientBuffer[index]);
+    gradient = clamp(gradient, -maxGradientClip, maxGradientClip);
     AdamData adam = MLPAdamBuffer[index];
     
     float4 currentWeight = MLPParameterBuffer[index];

@@ -139,11 +139,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
     qAO.Proceed();
     bool isOccluded = (qAO.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
-    // Target format: (Shadow, AO, unused, unused)
-    float targetShadow = isShadowed ? 0.0f : 1.0f;
-    float targetAO = isOccluded ? 0.0f : 1.0f;
-    float4 targetInput = float4(targetShadow, targetAO, 0.0f, 0.0f);
-
     // --- Dynamic Network Mathematics ---
     // The MLP buffer is a flat array of weights. We must calculate the offset for the output layer
     // based on the dynamic feature size.
@@ -161,6 +156,16 @@ void main(uint3 DTid : SV_DispatchThreadID)
     gateEncoding(gateData, activationIndex, activations);                
     evalLayerActivations(activations, hiddenOffset, 0,               featureQuartets,     4, featureQuartets, HIDDEN_LAYER);      
     evalLayerActivations(activations, outputOffset, featureQuartets, featureQuartets + 4, 1, 4,               OUTPUT_LAYER);      
+
+    // Target format: (Shadow, AO, unused, unused)
+    float targetShadow = isShadowed ? 0.0f : 1.0f;
+    float targetAO = isOccluded ? 0.0f : 1.0f;
+
+    float4 targetInput = float4(targetShadow, targetAO, 0.0f, 0.0f);
+    if (learningMode == 1)
+        targetInput.x = activations[featureQuartets + 4].x; // Ignore Shadows
+    else if (learningMode == 2) // Shadows Only
+        targetInput.y = activations[featureQuartets + 4].y; // Ignore AO
 
     // Evaluate Backward Pass
     float4 errors[ACTIVATION_QUARTETS_PER_NETWORK];

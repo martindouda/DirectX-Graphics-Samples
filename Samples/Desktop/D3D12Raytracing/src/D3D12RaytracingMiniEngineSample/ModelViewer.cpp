@@ -69,6 +69,10 @@ namespace Sponza
     extern ByteAddressBuffer m_GateFeatureGradientBuffer;
     extern ByteAddressBuffer m_GateMLPBuffer;
     extern ByteAddressBuffer m_GateMLPGradientBuffer;
+
+    extern NumVar m_SunOrientation;
+    extern NumVar m_SunInclination;
+    extern ExpVar m_SunLightIntensity;
 }
 
 ComPtr<ID3D12Device5> g_pRaytracingDevice;
@@ -108,7 +112,6 @@ enum RaytracingTypes
     Shadows,
     DiffuseHitShader,
     Reflection,
-    //GateTraining,
     NumTypes
 };
 
@@ -270,27 +273,24 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE /*hPrevInstance
 }
 
 const char* rayTracingModes[] = {
-    "Off", 
-    "Bary Rays", 
-    "Refl Bary", 
-    "Shadow Rays", 
-    "Diffuse&ShadowMaps",
-    "Diffuse&ShadowRays",
-    "Reflection Rays",
-    "GATE Visualization"
+    "GATE",
+    "Rasterized Diffuse & Shadow Maps",
+    "RTX Diffuse & Shadow Maps",
+    "RTX Diffuse & Shadow Rays",
+    "UVs", 
 };
 enum RaytracingMode
 {
+    RTM_GATE,
     RTM_OFF,
+    RTM_DIFFUSE_WITH_SHADOWMAPS,
+    RTM_DIFFUSE_WITH_SHADOWRAYS,
     RTM_TRAVERSAL,
     RTM_SSR,
     RTM_SHADOWS,
-    RTM_DIFFUSE_WITH_SHADOWMAPS,
-    RTM_DIFFUSE_WITH_SHADOWRAYS,
     RTM_REFLECTIONS,
-    RTM_GATE
 };
-EnumVar rayTracingMode("Application/Raytracing/RayTraceMode", RTM_DIFFUSE_WITH_SHADOWMAPS, _countof(rayTracingModes), rayTracingModes);
+EnumVar rayTracingMode("Application/Raytracing/RayTraceMode", RTM_GATE, _countof(rayTracingModes), rayTracingModes);
 
 class DescriptorHeapStack
 {
@@ -944,6 +944,8 @@ void D3D12RaytracingMiniEngineSample::Update(float deltaT)
         Sponza::m_Gate.SetIsTrainingPaused(!Sponza::m_Gate.GetIsTrainingPaused());
     if (GameInput::IsFirstPressed(GameInput::kKey_r))
         Sponza::m_Gate.ResetTraining();
+    if (GameInput::IsFirstPressed(GameInput::kKey_t))
+        Sponza::m_Gate.SetTexturesEnabled(!Sponza::m_Gate.GetTexturesEnabled());
 
     if (GameInput::IsFirstPressed(GameInput::kLShoulder))
         DebugZoom.Decrement();
@@ -951,21 +953,20 @@ void D3D12RaytracingMiniEngineSample::Update(float deltaT)
         DebugZoom.Increment();
 
     else if(GameInput::IsFirstPressed(GameInput::kKey_1))
-      rayTracingMode = RTM_DIFFUSE_WITH_SHADOWRAYS;
-    else if(GameInput::IsFirstPressed(GameInput::kKey_2))
       rayTracingMode = RTM_GATE;
+    else if(GameInput::IsFirstPressed(GameInput::kKey_2))
+      rayTracingMode = RTM_OFF;
     else if(GameInput::IsFirstPressed(GameInput::kKey_3))
-      rayTracingMode = RTM_TRAVERSAL;
-    else if(GameInput::IsFirstPressed(GameInput::kKey_4))
-      rayTracingMode = RTM_SHADOWS;
-    else if(GameInput::IsFirstPressed(GameInput::kKey_5))
       rayTracingMode = RTM_DIFFUSE_WITH_SHADOWMAPS;
-    else if(GameInput::IsFirstPressed(GameInput::kKey_6))
-      rayTracingMode = RTM_SSR;
+    else if (GameInput::IsFirstPressed(GameInput::kKey_4))
+      rayTracingMode = RTM_DIFFUSE_WITH_SHADOWRAYS;
+    else if(GameInput::IsFirstPressed(GameInput::kKey_5))
+      rayTracingMode = RTM_TRAVERSAL;
+    /*else if (GameInput::IsFirstPressed(GameInput::kKey_6))
     else if(GameInput::IsFirstPressed(GameInput::kKey_7))
       rayTracingMode = RTM_REFLECTIONS;
     else if (GameInput::IsFirstPressed(GameInput::kKey_8))
-      rayTracingMode = RTM_OFF;
+      rayTracingMode = RTM_OFF;*/
     
     m_CameraController->Update(deltaT);
 
@@ -1366,31 +1367,28 @@ void D3D12RaytracingMiniEngineSample::RenderImGui()
 
     ImGui::Begin("MiniEngine Raytracing Controls");
 
-    // 1. Raytracing Mode Selection
+    // Performance / App info
+    ImGui::Text("Performance");
+    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Raytracing Mode Selection
     ImGui::Text("Rendering Modes");
     int currentMode = (int)rayTracingMode;
     if (ImGui::Combo("Raytracing Mode", &currentMode, rayTracingModes, _countof(rayTracingModes)))
-    {
         rayTracingMode = currentMode;
-    }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // 2. Post-Processing & Effects
+    // Post-Processing & Effects
     ImGui::Text("Post-Processing & Effects");
-    /*if (TemporalEffects::EnableTAA.RenderGui("TAA"))
-        TemporalEffects::ClearHistory(Context);*/
     SSAO::Enable.RenderGui("SSAO");
-    DepthOfField::Enable.RenderGui("Depth of Field");
-    MotionBlur::Enable.RenderGui("Motion Blur");
     FXAA::Enable.RenderGui("FXAA");
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
     PostEffects::EnableHDR.RenderGui("HDR / Tonemap");
     PostEffects::EnableAdaptation.RenderGui("Auto Exposure");
     PostEffects::BloomEnable.RenderGui("Bloom");
@@ -1399,7 +1397,7 @@ void D3D12RaytracingMiniEngineSample::RenderImGui()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // 3. Camera Controls
+    // Camera Controls
     ImGui::Text("Camera Controls");
     int camPos = (int)m_CameraPosArrayCurrentPosition;
     if (ImGui::SliderInt("Predefined Camera", &camPos, 0, c_NumCameraPositions - 1))
@@ -1408,46 +1406,19 @@ void D3D12RaytracingMiniEngineSample::RenderImGui()
         SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
     }
 
-    // 4. Performance / App info
-    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::Text("Performance");
-    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-        1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-
-    // 5. Gate Visualization
+    ImGui::Text("Environment Lighting");
+    static float sunOri = -0.5f;
+    static float sunInc = 0.75f;
+    static float sunInt = 4.0f;
+    if (ImGui::SliderFloat("Sun Orientation", &sunOri, -3.14159f, 3.14159f, "%.3f rad"))
+        Sponza::m_SunOrientation = sunOri;
+    if (ImGui::SliderFloat("Sun Inclination", &sunInc, 0.0f, 1.0f, "%.3f"))
+        Sponza::m_SunInclination = sunInc;
+    if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 16.0f, "%.2f"))
+        Sponza::m_SunLightIntensity = sunInt;
     ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    ImGui::Text("GATE Visualization");
-
-    float texWidth = (float)Sponza::m_Gate.GetVisColorBuffer().GetWidth();
-    float texHeight = (float)Sponza::m_Gate.GetVisColorBuffer().GetHeight();
-    float windowWidth = ImGui::GetContentRegionAvail().x;
-    float scale = windowWidth / texWidth;
-    ImVec2 imageSize = ImVec2(texWidth * scale, texHeight * scale);
-
-    // --- THE DESCRIPTOR COPY ---
-    ID3D12DescriptorHeap* imguiHeap = GameCore::g_ImguiDescriptorHeap.GetHeapPointer();
-    UINT descriptorSize = Graphics::g_Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-    // Point to Slot 1 (Slot 0 is the ImGui font)
-    D3D12_CPU_DESCRIPTOR_HANDLE destCpuHandle = imguiHeap->GetCPUDescriptorHandleForHeapStart();
-    destCpuHandle.ptr += descriptorSize * 1;
-
-    D3D12_GPU_DESCRIPTOR_HANDLE destGpuHandle = imguiHeap->GetGPUDescriptorHandleForHeapStart();
-    destGpuHandle.ptr += descriptorSize * 1;
-
-    // Ask the GPU to copy our ColorBuffer's CPU descriptor into the ImGui GPU heap
-    Graphics::g_Device->CopyDescriptorsSimple(1, destCpuHandle, Sponza::m_Gate.GetVisColorBuffer().GetSRV(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-    // Pass the GPU pointer to ImGui!
-    ImTextureID texID = (ImTextureID)destGpuHandle.ptr;
-
-    // Render the image
-    ImGui::Image(texID, imageSize);
-
 
     ImGui::End();
 }
