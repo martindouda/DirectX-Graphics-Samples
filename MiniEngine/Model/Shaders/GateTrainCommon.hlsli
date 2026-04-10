@@ -374,6 +374,8 @@ void backpropLayer(const float4 target, inout float4 activations[ACTIVATION_QUAR
     {
         const float4 act = activations[q];
         float4 dCost_O = (layerType == OUTPUT_LAYER) ? (act - target) : errors[q];
+        
+        //const float4 dCost_Z = (layerType == HIDDEN_LAYER) ? (dCost_O * activationFunctionDeriv(act)) : dCost_O;
         const float4 dCost_Z = dCost_O * ((layerType == HIDDEN_LAYER) ? activationFunctionDeriv(act) : activationFunctionOutputDeriv(act));
         
         // Weights Gradient & Error Backprop
