@@ -93,9 +93,10 @@ namespace Sponza
         m_TrainingStep = 1;
 
         m_Resolution = m_DesiredResolution;
-        m_UseMaxTriangleArea = m_DesiredUseMaxTriangleArea;
         m_FeatureFloats = m_DesiredFeatureFloats;
         m_FeatureQuartets = (m_FeatureFloats + 3) / 4;
+        m_UseDeduplication = m_DesiredUseDeduplication;
+        m_UseMaxEdgeLength = m_DesiredUseMaxEdgeLength;
 
         BuildSpatialIndex();
         AllocateBuffers();
@@ -129,7 +130,8 @@ namespace Sponza
     {
         m_DesiredResolution = m_Resolution;
         m_DesiredFeatureFloats = m_FeatureFloats;
-        m_DesiredUseMaxTriangleArea = m_UseMaxTriangleArea; // Sync state
+        m_UseMaxEdgeLength = m_DesiredUseMaxEdgeLength;
+        m_DesiredUseDeduplication = m_UseDeduplication;
 
         auto tStart = std::chrono::high_resolution_clock::now();
 
@@ -143,64 +145,55 @@ namespace Sponza
         const unsigned char* rawVertexData = m_Model->GetVertexData();
         const unsigned char* rawIndexData = m_Model->GetIndexData();
 
-        // --- 1A. PASS 1: Calculate BOTH Average and Max areas ---
-        std::vector<float> meshMaxAreas(numMeshes, 0.0f);
-        std::vector<float> meshAvgAreas(numMeshes, 0.0f);
-        float globalMaxArea = 0.0f;
-        float globalMaxAvgArea = 0.0f;
+        // --- 1A. PASS 1: Calculate Edge Lengths ---
+        std::vector<float> meshMaxEdges(numMeshes, 0.0f);
+        std::vector<float> meshAvgEdges(numMeshes, 0.0f);
+        float globalMaxEdge = 0.0f;
+        float globalMaxAvgEdge = 0.0f;
 
         for (uint32_t i = 0; i < numMeshes; ++i)
         {
             const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
             uint32_t triCount = mesh.indexCount / 3;
-
-            float maxTriArea = 0.0f;
-            float totalArea = 0.0f;
+            float maxEdge = 0.0f;
+            float totalEdge = 0.0f;
 
             uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
             const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
 
             for (uint32_t t = 0; t < mesh.indexCount; t += 3)
             {
-                uint32_t i0 = cpuIndexData[t + 0] + baseVertex;
-                uint32_t i1 = cpuIndexData[t + 1] + baseVertex;
-                uint32_t i2 = cpuIndexData[t + 2] + baseVertex;
+                DirectX::XMVECTOR p0 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (cpuIndexData[t + 0] + baseVertex) * vertexStride));
+                DirectX::XMVECTOR p1 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (cpuIndexData[t + 1] + baseVertex) * vertexStride));
+                DirectX::XMVECTOR p2 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (cpuIndexData[t + 2] + baseVertex) * vertexStride));
 
-                DirectX::XMVECTOR p0 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (i0 * vertexStride)));
-                DirectX::XMVECTOR p1 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride)));
-                DirectX::XMVECTOR p2 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride)));
+                // Calculate the length of all three edges
+                float e0 = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(p1, p0)));
+                float e1 = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(p2, p1)));
+                float e2 = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(p0, p2)));
 
-                // Area = 0.5 * length(cross(p1-p0, p2-p0))
-                DirectX::XMVECTOR cross = DirectX::XMVector3Cross(DirectX::XMVectorSubtract(p1, p0), DirectX::XMVectorSubtract(p2, p0));
-                float triArea = DirectX::XMVectorGetX(DirectX::XMVector3Length(cross)) * 0.5f;
+                float maxTriEdge = std::max({ e0, e1, e2 });
 
-                totalArea += triArea;
-
-                if (triArea > maxTriArea)
-                    maxTriArea = triArea;
+                totalEdge += (e0 + e1 + e2);
+                if (maxTriEdge > maxEdge) maxEdge = maxTriEdge;
             }
 
-            // Store MAX metrics
-            meshMaxAreas[i] = maxTriArea;
-            if (maxTriArea > globalMaxArea)
-                globalMaxArea = maxTriArea;
+            meshMaxEdges[i] = maxEdge;
+            if (maxEdge > globalMaxEdge) globalMaxEdge = maxEdge;
 
-            // Store AVG metrics
-            float avgArea = totalArea / (float)triCount;
-            meshAvgAreas[i] = avgArea;
-            if (avgArea > globalMaxAvgArea)
-                globalMaxAvgArea = avgArea;
+            // Average edge length for this mesh
+            float avgEdge = totalEdge / (triCount * 3.0f);
+            meshAvgEdges[i] = avgEdge;
+            if (avgEdge > globalMaxAvgEdge) globalMaxAvgEdge = avgEdge;
         }
 
-        // --- 1B. PASS 2: Assign uniform-density resolutions ---
+        // --- 1B. PASS 2: Prepare Triangles and Points ---
         uint32_t currentGlobalPointOffset = 0;
         std::vector<GlobalTriangle> globalTris;
-
         const uint32_t MAX_RES = m_Resolution;
 
-        // Prevent division by zero
-        if (globalMaxArea == 0.0f) globalMaxArea = 1.0f;
-        if (globalMaxAvgArea == 0.0f) globalMaxAvgArea = 1.0f;
+        if (globalMaxEdge == 0.0f) globalMaxEdge = 1.0f;
+        if (globalMaxAvgEdge == 0.0f) globalMaxAvgEdge = 1.0f;
 
         for (uint32_t i = 0; i < numMeshes; ++i)
         {
@@ -208,22 +201,11 @@ namespace Sponza
             const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
             uint32_t triCount = mesh.indexCount / 3;
 
-            // SWITCH: Calculate ratio based on user's selected mode
-            float areaRatio = 0.0f;
-            if (m_UseMaxTriangleArea)
-                areaRatio = meshMaxAreas[i] / globalMaxArea;
-            else
-                areaRatio = meshAvgAreas[i] / globalMaxAvgArea;
-
-            // Map the ratio directly to the dynamic max resolution
-            uint32_t meshRes = static_cast<uint32_t>(std::round((float)MAX_RES * std::sqrt(areaRatio)));
-
-            // Clamp strictly between 1 and MAX_RES
-            meshRes = std::max(1u, std::min(MAX_RES, meshRes));
-
+            // Linear scaling based on edge length (No std::sqrt needed here anymore!)
+            float edgeRatio = m_UseMaxEdgeLength ? (meshMaxEdges[i] / globalMaxEdge) : (meshAvgEdges[i] / globalMaxAvgEdge);
+            uint32_t meshRes = std::max(1u, std::min(MAX_RES, (uint32_t)std::round((float)MAX_RES * edgeRatio)));
             uint32_t meshPtsPerTri = (meshRes + 1) * (meshRes + 2) / 2;
 
-            // ... (The rest of the function remains exactly the same starting from the inner loop)
             for (uint32_t t = 0; t < triCount; ++t)
             {
                 GlobalTriangle gt;
@@ -232,38 +214,31 @@ namespace Sponza
                 gt.pointOffset = currentGlobalPointOffset;
                 gt.materialIdx = mesh.materialIndex;
                 globalTris.push_back(gt);
-
                 currentGlobalPointOffset += meshPtsPerTri;
             }
-
             m_TotalTriangles += triCount;
         }
 
         m_TotalMeshColorPoints = currentGlobalPointOffset;
-        uint32_t totalMeshColorPoints = m_TotalMeshColorPoints;
 
-        std::vector<uint32_t> duplicateToUniqueMap(totalMeshColorPoints);
-        std::vector<Int3> allQuantizedPositions(totalMeshColorPoints);
+        // Pomocná pole pro deduplikaci
+        std::vector<uint32_t> duplicateToUniqueMap(m_TotalMeshColorPoints);
+        std::vector<Int3> allQuantizedPositions(m_TotalMeshColorPoints);
+        std::vector<uint32_t> pointToMeshMap(m_TotalMeshColorPoints); // NOVÉ: Sledování pøíslušnosti k meshi
         const float QUANTIZATION_FACTOR = 10000.0f;
 
-        // 2. Pre-generate barycentric layouts for ALL possible resolutions (1 to MAX_RES)
+        // Pøedvýpoèet barycentrik (beze zmìny)
         std::vector<std::vector<DirectX::XMFLOAT3>> precomputedBarycentrics(MAX_RES + 1);
         for (uint32_t r = 1; r <= MAX_RES; ++r)
         {
-            uint32_t pts = (r + 1) * (r + 2) / 2;
-            precomputedBarycentrics[r].resize(pts);
+            precomputedBarycentrics[r].resize((r + 1) * (r + 2) / 2);
             uint32_t idx = 0;
             for (uint32_t i = 0; i <= r; ++i)
-            {
                 for (uint32_t j = 0; j <= r - i; ++j)
-                {
-                    uint32_t k = r - i - j;
-                    precomputedBarycentrics[r][idx++] = { (float)i / r, (float)j / r, (float)k / r };
-                }
-            }
+                    precomputedBarycentrics[r][idx++] = { (float)i / r, (float)j / r, (float)(r - i - j) / r };
         }
 
-        // --- PHASE 1: Parallel point generation across all meshes (PPL) ---
+        // --- PHASE 1: Paralelní generování bodù + Mesh ID ---
         concurrency::parallel_for(uint32_t(0), numMeshes, [&](uint32_t meshIndex)
             {
                 const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
@@ -298,25 +273,28 @@ namespace Sponza
                         pos.y = bary[pt].x * p0->y + bary[pt].y * p1->y + bary[pt].z * p2->y;
                         pos.z = bary[pt].x * p0->z + bary[pt].y * p1->z + bary[pt].z * p2->z;
 
-                        Int3 qPos = {
+                        allQuantizedPositions[pOffset + pt] = {
                             static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR)),
                             static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR)),
                             static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR))
                         };
-
-                        allQuantizedPositions[pOffset + pt] = qPos;
+                        pointToMeshMap[pOffset + pt] = meshIndex; // Uložíme ID meshe
                     }
                     localTriOffset++;
                 }
             });
 
-        // --- PHASE 2: Parallel sorting of indices by 3D position (PPL) ---
+        // --- PHASE 2: Paralelní tøídìní ---
         std::vector<uint32_t> sortIndices(m_TotalMeshColorPoints);
         std::iota(sortIndices.begin(), sortIndices.end(), 0);
 
-        // Comparator compares two quantized positions and sorts the index array
-        concurrency::parallel_sort(sortIndices.begin(), sortIndices.end(), [&](uint32_t a, uint32_t b) 
+        concurrency::parallel_sort(sortIndices.begin(), sortIndices.end(), [&](uint32_t a, uint32_t b)
             {
+                // Pokud nepoužíváme globální deduplikaci, meshIndex je hlavní klíè
+                if (!m_UseDeduplication) {
+                    if (pointToMeshMap[a] != pointToMeshMap[b]) return pointToMeshMap[a] < pointToMeshMap[b];
+                }
+
                 const Int3& posA = allQuantizedPositions[a];
                 const Int3& posB = allQuantizedPositions[b];
                 if (posA.x != posB.x) return posA.x < posB.x;
@@ -324,7 +302,7 @@ namespace Sponza
                 return posA.z < posB.z;
             });
 
-        // --- PHASE 3: Linear assignment of Unique IDs (cache-friendly) ---
+        // --- PHASE 3: Pøiøazení Unique IDs ---
         m_UniqueSpatialVertexCount = 0;
         if (m_TotalMeshColorPoints > 0)
         {
@@ -338,13 +316,17 @@ namespace Sponza
                 const Int3& currPos = allQuantizedPositions[currIdx];
                 const Int3& prevPos = allQuantizedPositions[prevIdx];
 
-                // If the position differs from the previous one, we found a new unique point
-                if (currPos.x != prevPos.x || currPos.y != prevPos.y || currPos.z != prevPos.z)
-                    m_UniqueSpatialVertexCount++;
+                bool different = (currPos.x != prevPos.x || currPos.y != prevPos.y || currPos.z != prevPos.z);
 
+                // Pokud je vypnutá globální deduplikace, považujeme bod za unikátní i pøi zmìnì meshe
+                if (!m_UseDeduplication) {
+                    if (pointToMeshMap[currIdx] != pointToMeshMap[prevIdx]) different = true;
+                }
+
+                if (different) m_UniqueSpatialVertexCount++;
                 duplicateToUniqueMap[currIdx] = m_UniqueSpatialVertexCount;
             }
-            m_UniqueSpatialVertexCount++; // Because we started from 0
+            m_UniqueSpatialVertexCount++;
         }
 
         // --- PHASE 4: Buffer Creation ---
@@ -800,11 +782,13 @@ namespace Sponza
         ImGui::InputInt("Max Resolution Scale", &m_DesiredResolution, 1);
         m_DesiredResolution = std::max(1, std::min(m_DesiredResolution, 1024));
         ImGui::SliderInt("Feature Dimension", (int*)&m_DesiredFeatureFloats, 1, 32);
-        ImGui::Checkbox("Use Max Triangle Area (Off = Average)", &m_DesiredUseMaxTriangleArea);
+        ImGui::Checkbox("Use Max Edge Length (Off = Average)", &m_DesiredUseMaxEdgeLength);
+        ImGui::Checkbox("Use Spatial Deduplication", &m_DesiredUseDeduplication);
 
         if (m_DesiredResolution != (int)m_Resolution ||
             m_DesiredFeatureFloats != m_FeatureFloats ||
-            m_DesiredUseMaxTriangleArea != m_UseMaxTriangleArea)
+            m_DesiredUseMaxEdgeLength != m_UseMaxEdgeLength || // Updated Check
+            m_DesiredUseDeduplication != m_UseDeduplication)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Architecture changed! Reset training to apply.");
 
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))

@@ -55,6 +55,10 @@
 
 #include "imgui/imgui.h"
 
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 using namespace GameCore;
 using namespace Math;
@@ -203,9 +207,10 @@ public:
     virtual bool RequiresRaytracingSupport() const override { return true; }
 
     void SetCameraToPredefinedPosition(int cameraPosition);
+    void LoadCamerasFromFile(const std::string& filename);
+    void SaveCamerasToFile(const std::string& filename);
 
 private:
-
     void Raytracebarycentrics(CommandContext& context, const Math::Camera& camera, ColorBuffer& colorTarget);
     void RaytracebarycentricsSSR(CommandContext& context, const Math::Camera& camera, ColorBuffer& colorTarget, DepthBuffer& depth, ColorBuffer& normals);
     void RaytraceDiffuse(GraphicsContext& context, const Math::Camera& camera, ColorBuffer& colorTarget);
@@ -224,7 +229,7 @@ private:
         float pitch;
     };
 
-    CameraPosition m_CameraPosArray[c_NumCameraPositions];
+    std::vector<CameraPosition> m_CameraPosArray;
     UINT m_CameraPosArrayCurrentPosition;
 
 };
@@ -897,32 +902,7 @@ void D3D12RaytracingMiniEngineSample::Startup()
     //
     InitializeRaytracingStateObjects(model, numMeshes);
 
-    m_CameraPosArrayCurrentPosition = 0;
-    
-    // Lion's head
-    m_CameraPosArray[0].position = Vector3(-1100.0f, 170.0f, -30.0f);
-    m_CameraPosArray[0].heading = 1.5707f;
-    m_CameraPosArray[0].pitch = 0.0f;
-
-    // View of columns
-    m_CameraPosArray[1].position = Vector3(299.0f, 208.0f, -202.0f);
-    m_CameraPosArray[1].heading = -3.1111f;
-    m_CameraPosArray[1].pitch = 0.5953f;
-
-    // Bottom-up view from the floor
-    m_CameraPosArray[2].position = Vector3(-1237.61f, 80.60f, -26.02f);
-    m_CameraPosArray[2].heading = -1.5707f;
-    m_CameraPosArray[2].pitch = 0.268f;
-
-    // Top-down view from the second floor
-    m_CameraPosArray[3].position = Vector3(-977.90f, 595.05f, -194.97f);
-    m_CameraPosArray[3].heading = -2.077f;
-    m_CameraPosArray[3].pitch =  - 0.450f;
-
-    // View of corridors on the second floor
-    m_CameraPosArray[4].position = Vector3(-1463.0f, 600.0f, 394.52f);
-    m_CameraPosArray[4].heading = -1.236f;
-    m_CameraPosArray[4].pitch = 0.0f;
+    LoadCamerasFromFile("cameras.txt");
 }
 
 void D3D12RaytracingMiniEngineSample::Cleanup()
@@ -968,6 +948,43 @@ void D3D12RaytracingMiniEngineSample::Update(float deltaT)
     else if (GameInput::IsFirstPressed(GameInput::kKey_8))
       rayTracingMode = RTM_OFF;*/
     
+      // Cycle to next camera position
+    if (GameInput::IsFirstPressed(GameInput::kKey_c))
+    {
+        if (!m_CameraPosArray.empty())
+        {
+            m_CameraPosArrayCurrentPosition = (m_CameraPosArrayCurrentPosition + 1) % m_CameraPosArray.size();
+            SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
+        }
+    }
+
+    // Add current camera position
+    if (GameInput::IsFirstPressed(GameInput::kKey_equals) || GameInput::IsFirstPressed(GameInput::kKey_add))
+    {
+        Vector3 forward = m_Camera.GetForwardVec();
+        float pitch = asinf(forward.GetY());
+        float heading = atan2f(-forward.GetX(), -forward.GetZ());
+
+        CameraPosition cp = { m_Camera.GetPosition(), heading, pitch };
+        m_CameraPosArray.push_back(cp);
+        m_CameraPosArrayCurrentPosition = (UINT)m_CameraPosArray.size() - 1;
+    }
+
+    // Delete current camera position
+    if (GameInput::IsFirstPressed(GameInput::kKey_minus) || GameInput::IsFirstPressed(GameInput::kKey_subtract))
+    {
+        if (!m_CameraPosArray.empty() && m_CameraPosArrayCurrentPosition < m_CameraPosArray.size())
+        {
+            m_CameraPosArray.erase(m_CameraPosArray.begin() + m_CameraPosArrayCurrentPosition);
+            if (m_CameraPosArrayCurrentPosition >= m_CameraPosArray.size() && !m_CameraPosArray.empty())
+            {
+                m_CameraPosArrayCurrentPosition = (UINT)m_CameraPosArray.size() - 1;
+            }
+            if (!m_CameraPosArray.empty()) SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
+        }
+    }
+
+
     m_CameraController->Update(deltaT);
 
     // We use viewport offsets to jitter sample positions from frame to frame (for TAA.)
@@ -991,15 +1008,65 @@ void D3D12RaytracingMiniEngineSample::Update(float deltaT)
     m_MainScissor.bottom = (LONG)g_SceneColorBuffer.GetHeight();
 }
 
-void D3D12RaytracingMiniEngineSample::SetCameraToPredefinedPosition(int cameraPosition) 
+void D3D12RaytracingMiniEngineSample::SetCameraToPredefinedPosition(int cameraPosition)
 {
-    if (cameraPosition < 0 || cameraPosition >= c_NumCameraPositions)
+    if (m_CameraPosArray.empty() || cameraPosition < 0 || cameraPosition >= (int)m_CameraPosArray.size())
         return;
 
     m_CameraController->SetHeadingPitchAndPosition(
-        m_CameraPosArray[m_CameraPosArrayCurrentPosition].heading,
-        m_CameraPosArray[m_CameraPosArrayCurrentPosition].pitch,
-        m_CameraPosArray[m_CameraPosArrayCurrentPosition].position);
+        m_CameraPosArray[cameraPosition].heading,
+        m_CameraPosArray[cameraPosition].pitch,
+        m_CameraPosArray[cameraPosition].position);
+}
+
+void D3D12RaytracingMiniEngineSample::LoadCamerasFromFile(const std::string& filename)
+{
+    std::ifstream file(filename);
+    m_CameraPosArray.clear();
+
+    if (file.is_open())
+    {
+        std::string line;
+        while (std::getline(file, line))
+        {
+            std::istringstream iss(line);
+            CameraPosition cp;
+            float x, y, z;
+
+            if (iss >> x >> y >> z >> cp.heading >> cp.pitch)
+            {
+                cp.position = Vector3(x, y, z);
+                m_CameraPosArray.push_back(cp);
+            }
+        }
+        file.close();
+    }
+
+    // Fallback if file doesn't exist or is empty
+    if (m_CameraPosArray.empty())
+    {
+        m_CameraPosArray.push_back({ Vector3(-1100.0f, 170.0f, -30.0f), 1.5707f, 0.0f });
+        m_CameraPosArray.push_back({ Vector3(299.0f, 208.0f, -202.0f), -3.1111f, 0.5953f });
+        m_CameraPosArray.push_back({ Vector3(-1237.61f, 80.60f, -26.02f), -1.5707f, 0.268f });
+        m_CameraPosArray.push_back({ Vector3(-977.90f, 595.05f, -194.97f), -2.077f, -0.450f });
+        m_CameraPosArray.push_back({ Vector3(-1463.0f, 600.0f, 394.52f), -1.236f, 0.0f });
+    }
+
+    m_CameraPosArrayCurrentPosition = 0;
+}
+
+void D3D12RaytracingMiniEngineSample::SaveCamerasToFile(const std::string& filename)
+{
+    std::ofstream file(filename);
+    if (file.is_open())
+    {
+        for (const auto& cp : m_CameraPosArray)
+        {
+            file << cp.position.GetX() << " " << cp.position.GetY() << " " << cp.position.GetZ() << " "
+                << cp.heading << " " << cp.pitch << "\n";
+        }
+        file.close();
+    }
 }
 
 void D3D12RaytracingMiniEngineSample::RenderScene()
@@ -1397,15 +1464,6 @@ void D3D12RaytracingMiniEngineSample::RenderImGui()
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Camera Controls
-    ImGui::Text("Camera Controls");
-    int camPos = (int)m_CameraPosArrayCurrentPosition;
-    if (ImGui::SliderInt("Predefined Camera", &camPos, 0, c_NumCameraPositions - 1))
-    {
-        m_CameraPosArrayCurrentPosition = (UINT)camPos;
-        SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
-    }
-
     ImGui::Separator();
     ImGui::Spacing();
     ImGui::Text("Environment Lighting");
@@ -1419,6 +1477,51 @@ void D3D12RaytracingMiniEngineSample::RenderImGui()
     if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 16.0f, "%.2f"))
         Sponza::m_SunLightIntensity = sunInt;
     ImGui::Spacing();
+
+    // Camera Controls
+    ImGui::Text("Camera Controls");
+
+    if (!m_CameraPosArray.empty())
+    {
+        int camPos = (int)m_CameraPosArrayCurrentPosition;
+        if (ImGui::SliderInt("Predefined Camera", &camPos, 0, (int)m_CameraPosArray.size() - 1))
+        {
+            m_CameraPosArrayCurrentPosition = (UINT)camPos;
+            SetCameraToPredefinedPosition(m_CameraPosArrayCurrentPosition);
+        }
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "No predefined cameras.");
+    }
+
+    // Add / Remove buttons
+    if (ImGui::Button("Add Current [ + ]"))
+    {
+        Vector3 forward = m_Camera.GetForwardVec();
+        float pitch = asinf(forward.GetY());
+        float heading = atan2f(-forward.GetX(), -forward.GetZ());
+        m_CameraPosArray.push_back({ m_Camera.GetPosition(), heading, pitch });
+        m_CameraPosArrayCurrentPosition = (UINT)m_CameraPosArray.size() - 1;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete Selected [ - ]") && !m_CameraPosArray.empty())
+    {
+        m_CameraPosArray.erase(m_CameraPosArray.begin() + m_CameraPosArrayCurrentPosition);
+        if (m_CameraPosArrayCurrentPosition >= m_CameraPosArray.size() && !m_CameraPosArray.empty())
+            m_CameraPosArrayCurrentPosition = (UINT)m_CameraPosArray.size() - 1;
+    }
+
+    // File I/O buttons
+    if (ImGui::Button("Save to File"))
+    {
+        SaveCamerasToFile("cameras.txt");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load from File"))
+    {
+        LoadCamerasFromFile("cameras.txt");
+    }
 
     ImGui::End();
 }

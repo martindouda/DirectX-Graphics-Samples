@@ -121,12 +121,10 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         specularMask = 0.5f; 
     }
     
-    // --- MINIENGINE EXACT NORMAL & TOKSVIG AA ---
     float gloss = 128.0f;
     float3 mapNormal = BindlessTextures[materialIdx * 6 + 3].Sample(LinearSampler, input.UV).rgb;
     mapNormal = mapNormal * 2.0f - 1.0f;
 
-    // Detect mipmap degradation and soften the gloss automatically
     float normalLenSq = dot(mapNormal, mapNormal);
     float invNormalLen = rsqrt(normalLenSq);
     mapNormal *= invNormalLen;
@@ -151,10 +149,7 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     
     float3 directLight = 0.0f;
     if (!disableDirectionalLight)
-    {
-        // Notice: fSpecularLength is NOT multiplied by NdotL here, matching MiniEngine exactly
         directLight = (fDiffuseLength * albedo.rgb + fSpecularLength * specularAlbedo) * sunColor * shadowMask;
-    }
     
     // MiniEngine Sponza defaults to exactly 0.1 ambient intensity
     float3 ambientColor = float3(0.1f, 0.1f, 0.1f); 

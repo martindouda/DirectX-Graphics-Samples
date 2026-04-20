@@ -101,14 +101,17 @@ namespace Sponza
         uint32_t m_Resolution = 8;
         int      m_DesiredResolution = 0;        // For UI
         uint32_t m_PointsPerTri = 0;
-        bool     m_UseMaxTriangleArea = false;
-        bool     m_DesiredUseMaxTriangleArea = false;
+        bool     m_UseMaxEdgeLength = false;
+        bool     m_DesiredUseMaxEdgeLength = false;
         int      m_LearningMode = 0;
 
         // Add to your Hyperparameters section:
         uint32_t m_FeatureFloats = 4;
         uint32_t m_DesiredFeatureFloats = 0; // For UI
         uint32_t m_FeatureQuartets = 1;
+
+        bool m_UseDeduplication = true;
+        bool m_DesiredUseDeduplication = true;
 
         // Add to track dynamic MLP size:
         uint32_t m_MlpParameterCount = 212;
