@@ -116,10 +116,14 @@ namespace Sponza
         m_GateMLPAdamBuffer.Destroy();
 
         m_GlobalTriangleBuffer.Destroy();
-        m_VertexMaterialMap.Destroy();
 
         m_UniqueFeatureBuffer.Destroy();
         m_VertexMappingBuffer.Destroy();
+
+        m_GateFeatureDirtyBuffer.Destroy();
+        m_UniqueToDuplicateOffsetBuffer.Destroy();
+        m_UniqueToDuplicateCountBuffer.Destroy();
+        m_DuplicateIndicesBuffer.Destroy();
     }
 
     // =========================================================================
@@ -329,6 +333,32 @@ namespace Sponza
             m_UniqueSpatialVertexCount++;
         }
 
+        // --- PHASE 3.5: Inverted Index (Unique -> Duplicates) ---
+        std::vector<uint32_t> uniqueCounts(m_UniqueSpatialVertexCount, 0);
+        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i) {
+            uniqueCounts[duplicateToUniqueMap[i]]++;
+        }
+
+        std::vector<uint32_t> uniqueOffsets(m_UniqueSpatialVertexCount, 0);
+        uint32_t offset = 0;
+        for (size_t i = 0; i < m_UniqueSpatialVertexCount; ++i) {
+            uniqueOffsets[i] = offset;
+            offset += uniqueCounts[i];
+        }
+
+        // Vyplnìní samotných indexù
+        std::vector<uint32_t> currentOffsets = uniqueOffsets;
+        std::vector<uint32_t> duplicateIndices(m_TotalMeshColorPoints);
+        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i) {
+            uint32_t uniqueID = duplicateToUniqueMap[i];
+            duplicateIndices[currentOffsets[uniqueID]++] = i;
+        }
+
+        // Vytvoøení bufferù
+        m_UniqueToDuplicateCountBuffer.Create(L"Unique To Duplicate Count", m_UniqueSpatialVertexCount, sizeof(uint32_t), uniqueCounts.data());
+        m_UniqueToDuplicateOffsetBuffer.Create(L"Unique To Duplicate Offset", m_UniqueSpatialVertexCount, sizeof(uint32_t), uniqueOffsets.data());
+        m_DuplicateIndicesBuffer.Create(L"Duplicate Indices", m_TotalMeshColorPoints, sizeof(uint32_t), duplicateIndices.data());
+
         // --- PHASE 4: Buffer Creation ---
         m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", m_TotalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
         m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
@@ -340,6 +370,9 @@ namespace Sponza
     void Gate::AllocateBuffers()
     {
         srand(1337);
+
+        std::vector<uint32_t> zeroDirty(m_UniqueSpatialVertexCount, 0);
+        m_GateFeatureDirtyBuffer.Create(L"Feature Dirty Buffer", m_UniqueSpatialVertexCount, sizeof(uint32_t), zeroDirty.data());
 
         // A. DUPLICATED BUFFER
         uint32_t totalFeatureFloats = m_TotalMeshColorPoints * m_FeatureQuartets;
@@ -409,7 +442,7 @@ namespace Sponza
         m_GatePSO.Finalize();
 
         // 2. Setup Training Root Sig & PSOs
-        m_GateTrainRootSig.Reset(15, 1);
+        m_GateTrainRootSig.Reset(19, 1);
         m_GateTrainRootSig[0].InitAsConstants(0, 24); // register(b0)
         m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
         m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
@@ -427,10 +460,17 @@ namespace Sponza
         m_GateTrainRootSig[9].InitAsBufferUAV(4);  // u4
         m_GateTrainRootSig[10].InitAsBufferUAV(5); // u5
         m_GateTrainRootSig[11].InitAsBufferUAV(6); // u6
+        m_GateTrainRootSig[12].InitAsBufferUAV(7); // u7 (Dirty Buffer)
 
-        m_GateTrainRootSig[12].InitAsBufferSRV(3); // t3: VertexMappingBuffer
-        m_GateTrainRootSig[13].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
-        m_GateTrainRootSig[14].InitAsBufferSRV(5); // t5: TLAS for Ray Queries
+        // Posunuté pùvodní SRVs
+        m_GateTrainRootSig[13].InitAsBufferSRV(3); // t3: VertexMappingBuffer
+        m_GateTrainRootSig[14].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
+        m_GateTrainRootSig[15].InitAsBufferSRV(5); // t5: TLAS pro Ray Queries
+
+        // PØIDÁNO: Nové SRVs pro Inverted Index
+        m_GateTrainRootSig[16].InitAsBufferSRV(6); // t6: Offset Buffer
+        m_GateTrainRootSig[17].InitAsBufferSRV(7); // t7: Count Buffer
+        m_GateTrainRootSig[18].InitAsBufferSRV(8); // t8: Duplicate Indices
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
@@ -522,9 +562,9 @@ namespace Sponza
 
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(12, m_VertexMappingBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(14, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_VertexMappingBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(14, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(15, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
 
         trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
         trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));
@@ -537,6 +577,11 @@ namespace Sponza
         trainCtx.SetBufferUAV(9, m_GateMLPGradientBuffer);
         trainCtx.SetBufferUAV(10, m_GateMLPAdamBuffer);
         trainCtx.SetBufferUAV(11, m_LossBuffer);
+
+        trainCtx.SetBufferUAV(12, m_GateFeatureDirtyBuffer);
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(16, m_UniqueToDuplicateOffsetBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(17, m_UniqueToDuplicateCountBuffer.GetGpuVirtualAddress());
+        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(18, m_DuplicateIndicesBuffer.GetGpuVirtualAddress());
 
         auto cmdList = trainCtx.GetCommandList();
 
@@ -562,13 +607,15 @@ namespace Sponza
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 5); // END 5
 
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
+        trainCtx.InsertUAVBarrier(m_GateFeatureDirtyBuffer);
 
         // 4. Broadcast
-        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6); // START 6
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6);
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
-        trainCtx.Dispatch(Math::DivideByMultiple(m_TotalMeshColorPoints, 1024), 1, 1);
-        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7); // END 7
+        // Zmìna rozlišení vláken:
+        trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount, 1024), 1, 1);
+        cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7);
 
         trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

@@ -109,6 +109,9 @@ Texture2D<uint> VisibilityBuffer : register(t2, space0);
 StructuredBuffer<uint> VertexMappingBuffer : register(t3);
 StructuredBuffer<float4> UniqueFeatureBuffer : register(t4);
 RaytracingAccelerationStructure SceneBVH : register(t5);
+StructuredBuffer<uint> UniqueToDuplicateOffsetBuffer : register(t6);
+StructuredBuffer<uint> UniqueToDuplicateCountBuffer : register(t7);
+StructuredBuffer<uint> DuplicateIndicesBuffer : register(t8);
 
 SamplerState LinearSampler : register(s0);
 Texture2D<float4> BindlessTextures[] : register(t0, space1);
@@ -125,6 +128,8 @@ RWStructuredBuffer<float4> MLPParameterBuffer : register(u3);
 RWStructuredBuffer<int4> MLPGradientBuffer : register(u4);
 RWStructuredBuffer<AdamData> MLPAdamBuffer : register(u5);
 RWByteAddressBuffer LossBuffer : register(u6);
+RWStructuredBuffer<uint> FeatureDirtyBuffer : register(u7);
+
 #endif
 
 // =========================================================================

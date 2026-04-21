@@ -19,6 +19,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (packedGradient.x == 0 && packedGradient.y == 0 && packedGradient.z == 0 && packedGradient.w == 0)
         return;
 
+    uint uniqueID = index / featureQuartets;
+    FeatureDirtyBuffer[uniqueID] = 1;
+
     float4 gradient = unpackFloat4(packedGradient);
     gradient = clamp(gradient, -maxGradientClip, maxGradientClip);
     AdamData adam = FeatureAdamBuffer[index];

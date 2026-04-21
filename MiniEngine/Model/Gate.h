@@ -132,24 +132,28 @@ namespace Sponza
         bool     m_DirectionalLightEnabled = true;
 
         // --- GPU Resources: Geometry & Features ---
-        StructuredBuffer  m_GlobalTriangleBuffer;
-        StructuredBuffer  m_VertexMaterialMap;
+        StructuredBuffer m_GlobalTriangleBuffer;          // Triangle metadata (indices, resolution, point offsets)
 
         // Cache-coherency architecture buffers
-        StructuredBuffer  m_GateFeatureBuffer;          // Duplicated  (for fast read during Inference/Backprop)
-        StructuredBuffer  m_UniqueFeatureBuffer;        // Unique      (for write by Adam optimizer)
-        StructuredBuffer  m_VertexMappingBuffer;        // N:M mapping (for copying data to duplicates)
+        StructuredBuffer m_GateFeatureBuffer;             // Duplicated features for fast O(1) read during Inference
+        StructuredBuffer m_UniqueFeatureBuffer;           // Unique features for safe atomic writes during Backprop
+		StructuredBuffer m_VertexMappingBuffer;           // Maps linear point indices to unique feature IDs, used for gradient accumulation in backrop
 
-        StructuredBuffer m_GateFeatureGradientBuffer;
-        StructuredBuffer m_GateFeatureAdamBuffer;
+        StructuredBuffer m_GateFeatureGradientBuffer;     // Accumulated loss gradients for unique features
+        StructuredBuffer m_GateFeatureAdamBuffer;         // AdamW optimizer state (mean, variance) for features
 
         // --- GPU Resources: MLP ---
-        StructuredBuffer m_GateMLPBuffer;
-        StructuredBuffer m_GateMLPGradientBuffer;
-        StructuredBuffer m_GateMLPAdamBuffer;
+        StructuredBuffer m_GateMLPBuffer;                 // Trainable weights and biases of the MLP network
+        StructuredBuffer m_GateMLPGradientBuffer;         // Accumulated loss gradients for MLP weights
+        StructuredBuffer m_GateMLPAdamBuffer;             // AdamW optimizer state for MLP weights
+
+        // --- GPU Resources: Sparse "Push" Broadcast Architecture ---
+        StructuredBuffer m_GateFeatureDirtyBuffer;        // Flags indicating which unique features were updated this frame
+        StructuredBuffer m_UniqueToDuplicateOffsetBuffer; // Inverted index: start offset for duplicates
+        StructuredBuffer m_UniqueToDuplicateCountBuffer;  // Inverted index: total duplicates per unique feature
+        StructuredBuffer m_DuplicateIndicesBuffer;        // Inverted index: flat array of all duplicate linear indices
 
         // --- Root Signatures & Pipeline States ---
-
         // Inference Pipeline
         RootSignature     m_GateRootSig;
         GraphicsPSO       m_GatePSO;
