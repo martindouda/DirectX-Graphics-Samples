@@ -30,6 +30,51 @@ using namespace Graphics;
 // --- External Dependencies ---
 extern Microsoft::WRL::ComPtr<ID3D12Resource> g_bvh_topLevelAccelerationStructure;
 
+// --- GPU Constant Buffer Layouts ---
+namespace
+{
+    struct TrainingConstants
+    {
+        uint32_t trainingStep;
+        uint32_t totalTriangles;
+        float featureLearningRate;
+        float mlpLearningRate;
+        float adamEpsilon;
+        float adamBeta1;
+        float adamBeta2;
+        float weightDecay;
+        float screenSpaceRatio;
+        uint32_t VertexStride;
+        uint32_t uvOffset;
+        uint32_t screenWidth;
+        uint32_t screenHeight;
+        uint32_t totalMeshColorPoints;
+        float aoRadius;
+        uint32_t uniqueVertexCount;
+        DirectX::XMFLOAT3 sunDirection;
+        uint32_t featureFloats;
+        uint32_t featureQuartets;
+        uint32_t mlpQuartets;
+        uint32_t learningMode;
+        float maxGradientClip;
+    };
+
+    struct InferenceConstants
+    {
+        uint32_t globalTriangleOffset;
+        uint32_t lightingMode;
+        uint32_t renderFlags;
+        uint32_t materialIdx;
+        DirectX::XMFLOAT3 sunDirection;
+        float sunIntensity;
+        uint32_t featureFloats;
+        uint32_t featureQuartets;
+        float pad[2];
+        DirectX::XMFLOAT3 cameraPos;
+        float pad2;
+    };
+}
+
 namespace Sponza
 {
     // =========================================================================
@@ -42,8 +87,7 @@ namespace Sponza
         m_GateOptMLPPSO(L"GATE: Optimize MLP"),
         m_GateOptFeatPSO(L"GATE: Optimize Features"),
         m_EncodeColorPSO(L"GATE: Encode UVs CS"),
-        m_Model(nullptr),
-        m_PointsPerTri(0)
+        m_Model(nullptr)
     {
     }
 
@@ -56,10 +100,16 @@ namespace Sponza
     // Lifecycle
     // =========================================================================
 
-    void Gate::Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
+    void Gate::LoadModel(ModelH3D& model)
     {
+        //model.Load(L"Sponza/sponza.h3d");
+        model.Load(L"StanfordDragon/Dragon.h3d");
+        //model.Load(L"Table/Table.h3d");
         m_Model = &model;
+	}
 
+    void Gate::Startup(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
+    {
         m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
         m_VisColorBuffer.Create(L"Visibility Vis Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R8G8B8A8_UNORM);
 
@@ -92,11 +142,11 @@ namespace Sponza
         Graphics::g_CommandManager.IdleGPU();
         m_TrainingStep = 1;
 
-        m_Resolution = m_DesiredResolution;
-        m_FeatureFloats = m_DesiredFeatureFloats;
-        m_FeatureQuartets = (m_FeatureFloats + 3) / 4;
-        m_UseDeduplication = m_DesiredUseDeduplication;
-        m_UseMaxEdgeLength = m_DesiredUseMaxEdgeLength;
+        m_Config.resolution = m_Config.desiredResolution;
+        m_Config.featureFloats = m_Config.desiredFeatureFloats;
+        m_FeatureQuartets = (m_Config.featureFloats + 3) / 4;
+        m_Config.useDeduplication = m_Config.desiredUseDeduplication;
+        m_Config.useMaxEdgeLength = m_Config.desiredUseMaxEdgeLength;
 
         BuildSpatialIndex();
         AllocateBuffers();
@@ -124,6 +174,11 @@ namespace Sponza
         m_UniqueToDuplicateOffsetBuffer.Destroy();
         m_UniqueToDuplicateCountBuffer.Destroy();
         m_DuplicateIndicesBuffer.Destroy();
+
+        m_GateColorBuffer.Destroy();
+        m_VisColorBuffer.Destroy();
+        m_LossBuffer.Destroy();
+        m_LossReadbackBuffer.Destroy();
     }
 
     // =========================================================================
@@ -132,36 +187,56 @@ namespace Sponza
 
     void Gate::BuildSpatialIndex()
     {
-        m_DesiredResolution = m_Resolution;
-        m_DesiredFeatureFloats = m_FeatureFloats;
-        m_UseMaxEdgeLength = m_DesiredUseMaxEdgeLength;
-        m_DesiredUseDeduplication = m_UseDeduplication;
+        m_Config.desiredResolution = m_Config.resolution;
+        m_Config.desiredFeatureFloats = m_Config.featureFloats;
+        m_Config.useMaxEdgeLength = m_Config.desiredUseMaxEdgeLength;
+        m_Config.desiredUseDeduplication = m_Config.useDeduplication;
 
         auto tStart = std::chrono::high_resolution_clock::now();
 
         uint32_t vertexStride = m_Model->GetVertexStride();
         m_TotalVertices = m_Model->GetVertexBuffer().SizeInBytes / vertexStride;
 
-        uint32_t numMeshes = m_Model->GetMeshCount();
-        std::vector<uint32_t> meshTriOffsets(numMeshes);
-        m_TotalTriangles = 0;
+        // 1. Calculate Edges
+        std::vector<float> meshMaxEdges, meshAvgEdges;
+        float globalMaxEdge = 0.0f, globalMaxAvgEdge = 0.0f;
+        CalculateMeshEdgeLengths(meshMaxEdges, meshAvgEdges, globalMaxEdge, globalMaxAvgEdge);
 
+        // 2. Generate Points
+        std::vector<GlobalTriangle> globalTris;
+        std::vector<Int3> allQuantizedPositions;
+        std::vector<uint32_t> pointToMeshMap;
+        GenerateQuantizedPoints(meshMaxEdges, meshAvgEdges, globalMaxEdge, globalMaxAvgEdge, globalTris, allQuantizedPositions, pointToMeshMap);
+
+        // 3. Sort & Deduplicate
+        std::vector<uint32_t> duplicateToUniqueMap(m_TotalMeshColorPoints);
+        BuildInvertedSpatialIndex(allQuantizedPositions, pointToMeshMap, duplicateToUniqueMap);
+
+        // 4. Create Buffers
+        m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", m_TotalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
+        m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
+
+        auto tEnd = std::chrono::high_resolution_clock::now();
+        m_CpuTimeBuildSpatialIndex = std::chrono::duration<float, std::milli>(tEnd - tStart).count();
+    }
+
+    void Gate::CalculateMeshEdgeLengths(std::vector<float>& outMeshMaxEdges, std::vector<float>& outMeshAvgEdges, float& outGlobalMaxEdge, float& outGlobalMaxAvgEdge)
+    {
+        uint32_t numMeshes = m_Model->GetMeshCount();
+        uint32_t vertexStride = m_Model->GetVertexStride();
         const unsigned char* rawVertexData = m_Model->GetVertexData();
         const unsigned char* rawIndexData = m_Model->GetIndexData();
 
-        // --- 1A. PASS 1: Calculate Edge Lengths ---
-        std::vector<float> meshMaxEdges(numMeshes, 0.0f);
-        std::vector<float> meshAvgEdges(numMeshes, 0.0f);
-        float globalMaxEdge = 0.0f;
-        float globalMaxAvgEdge = 0.0f;
+        outMeshMaxEdges.assign(numMeshes, 0.0f);
+        outMeshAvgEdges.assign(numMeshes, 0.0f);
+        outGlobalMaxEdge = 0.0f;
+        outGlobalMaxAvgEdge = 0.0f;
 
         for (uint32_t i = 0; i < numMeshes; ++i)
         {
             const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
             uint32_t triCount = mesh.indexCount / 3;
-            float maxEdge = 0.0f;
-            float totalEdge = 0.0f;
-
+            float maxEdge = 0.0f, totalEdge = 0.0f;
             uint32_t baseVertex = mesh.vertexDataByteOffset / vertexStride;
             const uint16_t* cpuIndexData = (const uint16_t*)(rawIndexData + mesh.indexDataByteOffset);
 
@@ -171,33 +246,43 @@ namespace Sponza
                 DirectX::XMVECTOR p1 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (cpuIndexData[t + 1] + baseVertex) * vertexStride));
                 DirectX::XMVECTOR p2 = DirectX::XMLoadFloat3((DirectX::XMFLOAT3*)(rawVertexData + (cpuIndexData[t + 2] + baseVertex) * vertexStride));
 
-                // Calculate the length of all three edges
                 float e0 = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(p1, p0)));
                 float e1 = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(p2, p1)));
                 float e2 = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(p0, p2)));
 
                 float maxTriEdge = std::max({ e0, e1, e2 });
-
                 totalEdge += (e0 + e1 + e2);
-                if (maxTriEdge > maxEdge) maxEdge = maxTriEdge;
+                if (maxTriEdge > maxEdge)
+                    maxEdge = maxTriEdge;
             }
 
-            meshMaxEdges[i] = maxEdge;
-            if (maxEdge > globalMaxEdge) globalMaxEdge = maxEdge;
+            outMeshMaxEdges[i] = maxEdge;
+            if (maxEdge > outGlobalMaxEdge)
+                outGlobalMaxEdge = maxEdge;
 
-            // Average edge length for this mesh
             float avgEdge = totalEdge / (triCount * 3.0f);
-            meshAvgEdges[i] = avgEdge;
-            if (avgEdge > globalMaxAvgEdge) globalMaxAvgEdge = avgEdge;
+            outMeshAvgEdges[i] = avgEdge;
+            if (avgEdge > outGlobalMaxAvgEdge)
+                outGlobalMaxAvgEdge = avgEdge;
         }
+    }
 
-        // --- 1B. PASS 2: Prepare Triangles and Points ---
+    void Gate::GenerateQuantizedPoints(const std::vector<float>& meshMaxEdges, const std::vector<float>& meshAvgEdges, float globalMaxEdge, float globalMaxAvgEdge, std::vector<GlobalTriangle>& outGlobalTris, std::vector<Int3>& outQuantizedPositions, std::vector<uint32_t>& outPointToMeshMap)
+    {
+        uint32_t numMeshes = m_Model->GetMeshCount();
+        uint32_t vertexStride = m_Model->GetVertexStride();
+        const unsigned char* rawVertexData = m_Model->GetVertexData();
+        const unsigned char* rawIndexData = m_Model->GetIndexData();
+
+        std::vector<uint32_t> meshTriOffsets(numMeshes);
+        m_TotalTriangles = 0;
         uint32_t currentGlobalPointOffset = 0;
-        std::vector<GlobalTriangle> globalTris;
-        const uint32_t MAX_RES = m_Resolution;
+        const uint32_t MAX_RES = m_Config.resolution;
 
-        if (globalMaxEdge == 0.0f) globalMaxEdge = 1.0f;
-        if (globalMaxAvgEdge == 0.0f) globalMaxAvgEdge = 1.0f;
+        if (globalMaxEdge == 0.0f)
+            globalMaxEdge = 1.0f;
+        if (globalMaxAvgEdge == 0.0f)
+            globalMaxAvgEdge = 1.0f;
 
         for (uint32_t i = 0; i < numMeshes; ++i)
         {
@@ -205,33 +290,22 @@ namespace Sponza
             const ModelH3D::Mesh& mesh = m_Model->GetMesh(i);
             uint32_t triCount = mesh.indexCount / 3;
 
-            // Linear scaling based on edge length (No std::sqrt needed here anymore!)
-            float edgeRatio = m_UseMaxEdgeLength ? (meshMaxEdges[i] / globalMaxEdge) : (meshAvgEdges[i] / globalMaxAvgEdge);
+            float edgeRatio = m_Config.useMaxEdgeLength ? (meshMaxEdges[i] / globalMaxEdge) : (meshAvgEdges[i] / globalMaxAvgEdge);
             uint32_t meshRes = std::max(1u, std::min(MAX_RES, (uint32_t)std::round((float)MAX_RES * edgeRatio)));
             uint32_t meshPtsPerTri = (meshRes + 1) * (meshRes + 2) / 2;
 
             for (uint32_t t = 0; t < triCount; ++t)
             {
-                GlobalTriangle gt;
-                gt.resolution = meshRes;
-                gt.pointsPerTri = meshPtsPerTri;
-                gt.pointOffset = currentGlobalPointOffset;
-                gt.materialIdx = mesh.materialIndex;
-                globalTris.push_back(gt);
+                outGlobalTris.push_back({ 0, 0, 0, mesh.materialIndex, currentGlobalPointOffset, meshRes, meshPtsPerTri, 0 });
                 currentGlobalPointOffset += meshPtsPerTri;
             }
             m_TotalTriangles += triCount;
         }
-
         m_TotalMeshColorPoints = currentGlobalPointOffset;
 
-        // Pomocná pole pro deduplikaci
-        std::vector<uint32_t> duplicateToUniqueMap(m_TotalMeshColorPoints);
-        std::vector<Int3> allQuantizedPositions(m_TotalMeshColorPoints);
-        std::vector<uint32_t> pointToMeshMap(m_TotalMeshColorPoints); // NOVÉ: Sledování pøíslušnosti k meshi
-        const float QUANTIZATION_FACTOR = 10000.0f;
+        outQuantizedPositions.resize(m_TotalMeshColorPoints);
+        outPointToMeshMap.resize(m_TotalMeshColorPoints);
 
-        // Pøedvýpoèet barycentrik (beze zmìny)
         std::vector<std::vector<DirectX::XMFLOAT3>> precomputedBarycentrics(MAX_RES + 1);
         for (uint32_t r = 1; r <= MAX_RES; ++r)
         {
@@ -242,7 +316,7 @@ namespace Sponza
                     precomputedBarycentrics[r][idx++] = { (float)i / r, (float)j / r, (float)(r - i - j) / r };
         }
 
-        // --- PHASE 1: Paralelní generování bodù + Mesh ID ---
+        const float QUANTIZATION_FACTOR = 10000.0f;
         concurrency::parallel_for(uint32_t(0), numMeshes, [&](uint32_t meshIndex)
             {
                 const ModelH3D::Mesh& mesh = m_Model->GetMesh(meshIndex);
@@ -256,115 +330,98 @@ namespace Sponza
                     uint32_t i1 = cpuIndexData[i + 1] + baseVertex;
                     uint32_t i2 = cpuIndexData[i + 2] + baseVertex;
 
-                    globalTris[localTriOffset].i0 = i0;
-                    globalTris[localTriOffset].i1 = i1;
-                    globalTris[localTriOffset].i2 = i2;
+                    outGlobalTris[localTriOffset].i0 = i0;
+                    outGlobalTris[localTriOffset].i1 = i1;
+                    outGlobalTris[localTriOffset].i2 = i2;
 
-                    uint32_t res = globalTris[localTriOffset].resolution;
-                    uint32_t pts = globalTris[localTriOffset].pointsPerTri;
-                    uint32_t pOffset = globalTris[localTriOffset].pointOffset;
+                    uint32_t res = outGlobalTris[localTriOffset].resolution;
+                    uint32_t pts = outGlobalTris[localTriOffset].pointsPerTri;
+                    uint32_t pOffset = outGlobalTris[localTriOffset].pointOffset;
 
                     DirectX::XMFLOAT3* p0 = (DirectX::XMFLOAT3*)(rawVertexData + (i0 * vertexStride));
                     DirectX::XMFLOAT3* p1 = (DirectX::XMFLOAT3*)(rawVertexData + (i1 * vertexStride));
                     DirectX::XMFLOAT3* p2 = (DirectX::XMFLOAT3*)(rawVertexData + (i2 * vertexStride));
 
                     const auto& bary = precomputedBarycentrics[res];
-
                     for (uint32_t pt = 0; pt < pts; ++pt)
                     {
-                        DirectX::XMFLOAT3 pos;
-                        pos.x = bary[pt].x * p0->x + bary[pt].y * p1->x + bary[pt].z * p2->x;
-                        pos.y = bary[pt].x * p0->y + bary[pt].y * p1->y + bary[pt].z * p2->y;
-                        pos.z = bary[pt].x * p0->z + bary[pt].y * p1->z + bary[pt].z * p2->z;
-
-                        allQuantizedPositions[pOffset + pt] = {
-                            static_cast<int32_t>(std::round(pos.x * QUANTIZATION_FACTOR)),
-                            static_cast<int32_t>(std::round(pos.y * QUANTIZATION_FACTOR)),
-                            static_cast<int32_t>(std::round(pos.z * QUANTIZATION_FACTOR))
+                        outQuantizedPositions[pOffset + pt] =
+                        {
+                            static_cast<int32_t>(std::round((bary[pt].x * p0->x + bary[pt].y * p1->x + bary[pt].z * p2->x) * QUANTIZATION_FACTOR)),
+                            static_cast<int32_t>(std::round((bary[pt].x * p0->y + bary[pt].y * p1->y + bary[pt].z * p2->y) * QUANTIZATION_FACTOR)),
+                            static_cast<int32_t>(std::round((bary[pt].x * p0->z + bary[pt].y * p1->z + bary[pt].z * p2->z) * QUANTIZATION_FACTOR))
                         };
-                        pointToMeshMap[pOffset + pt] = meshIndex; // Uložíme ID meshe
+                        outPointToMeshMap[pOffset + pt] = meshIndex;
                     }
                     localTriOffset++;
                 }
             });
+    }
 
-        // --- PHASE 2: Paralelní tøídìní ---
+    void Gate::BuildInvertedSpatialIndex(std::vector<Int3>& quantizedPositions, std::vector<uint32_t>& pointToMeshMap, std::vector<uint32_t>& outDuplicateToUniqueMap)
+    {
         std::vector<uint32_t> sortIndices(m_TotalMeshColorPoints);
         std::iota(sortIndices.begin(), sortIndices.end(), 0);
 
-        concurrency::parallel_sort(sortIndices.begin(), sortIndices.end(), [&](uint32_t a, uint32_t b)
+        concurrency::parallel_sort(sortIndices.begin(), sortIndices.end(), [&](uint32_t a, uint32_t b) {
+            if (!m_Config.useDeduplication)
             {
-                // Pokud nepoužíváme globální deduplikaci, meshIndex je hlavní klíè
-                if (!m_UseDeduplication) {
-                    if (pointToMeshMap[a] != pointToMeshMap[b]) return pointToMeshMap[a] < pointToMeshMap[b];
-                }
-
-                const Int3& posA = allQuantizedPositions[a];
-                const Int3& posB = allQuantizedPositions[b];
-                if (posA.x != posB.x) return posA.x < posB.x;
-                if (posA.y != posB.y) return posA.y < posB.y;
-                return posA.z < posB.z;
+                if (pointToMeshMap[a] != pointToMeshMap[b])
+                    return pointToMeshMap[a] < pointToMeshMap[b];
+            }
+            const Int3& posA = quantizedPositions[a];
+            const Int3& posB = quantizedPositions[b];
+            if (posA.x != posB.x) return posA.x < posB.x;
+            if (posA.y != posB.y) return posA.y < posB.y;
+            return posA.z < posB.z;
             });
 
-        // --- PHASE 3: Pøiøazení Unique IDs ---
         m_UniqueSpatialVertexCount = 0;
         if (m_TotalMeshColorPoints > 0)
         {
-            duplicateToUniqueMap[sortIndices[0]] = 0;
-
+            outDuplicateToUniqueMap[sortIndices[0]] = 0;
             for (size_t i = 1; i < m_TotalMeshColorPoints; ++i)
             {
                 uint32_t currIdx = sortIndices[i];
                 uint32_t prevIdx = sortIndices[i - 1];
 
-                const Int3& currPos = allQuantizedPositions[currIdx];
-                const Int3& prevPos = allQuantizedPositions[prevIdx];
-
+                const Int3& currPos = quantizedPositions[currIdx];
+                const Int3& prevPos = quantizedPositions[prevIdx];
                 bool different = (currPos.x != prevPos.x || currPos.y != prevPos.y || currPos.z != prevPos.z);
 
-                // Pokud je vypnutá globální deduplikace, považujeme bod za unikátní i pøi zmìnì meshe
-                if (!m_UseDeduplication) {
-                    if (pointToMeshMap[currIdx] != pointToMeshMap[prevIdx]) different = true;
-                }
+                if (!m_Config.useDeduplication && pointToMeshMap[currIdx] != pointToMeshMap[prevIdx])
+                    different = true;
 
-                if (different) m_UniqueSpatialVertexCount++;
-                duplicateToUniqueMap[currIdx] = m_UniqueSpatialVertexCount;
+                if (different)
+                    m_UniqueSpatialVertexCount++;
+                outDuplicateToUniqueMap[currIdx] = m_UniqueSpatialVertexCount;
             }
             m_UniqueSpatialVertexCount++;
         }
 
-        // --- PHASE 3.5: Inverted Index (Unique -> Duplicates) ---
         std::vector<uint32_t> uniqueCounts(m_UniqueSpatialVertexCount, 0);
-        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i) {
-            uniqueCounts[duplicateToUniqueMap[i]]++;
-        }
+        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i)
+            uniqueCounts[outDuplicateToUniqueMap[i]]++;
 
         std::vector<uint32_t> uniqueOffsets(m_UniqueSpatialVertexCount, 0);
         uint32_t offset = 0;
-        for (size_t i = 0; i < m_UniqueSpatialVertexCount; ++i) {
+        for (size_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
+        {
             uniqueOffsets[i] = offset;
             offset += uniqueCounts[i];
         }
 
-        // Vyplnìní samotných indexù
         std::vector<uint32_t> currentOffsets = uniqueOffsets;
         std::vector<uint32_t> duplicateIndices(m_TotalMeshColorPoints);
-        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i) {
-            uint32_t uniqueID = duplicateToUniqueMap[i];
+        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i)
+        {
+            uint32_t uniqueID = outDuplicateToUniqueMap[i];
             duplicateIndices[currentOffsets[uniqueID]++] = i;
         }
 
-        // Vytvoøení bufferù
         m_UniqueToDuplicateCountBuffer.Create(L"Unique To Duplicate Count", m_UniqueSpatialVertexCount, sizeof(uint32_t), uniqueCounts.data());
         m_UniqueToDuplicateOffsetBuffer.Create(L"Unique To Duplicate Offset", m_UniqueSpatialVertexCount, sizeof(uint32_t), uniqueOffsets.data());
         m_DuplicateIndicesBuffer.Create(L"Duplicate Indices", m_TotalMeshColorPoints, sizeof(uint32_t), duplicateIndices.data());
-
-        // --- PHASE 4: Buffer Creation ---
-        m_VertexMappingBuffer.Create(L"Mesh Colors Mapping Buffer", m_TotalMeshColorPoints, sizeof(uint32_t), duplicateToUniqueMap.data());
-        m_GlobalTriangleBuffer.Create(L"Global Triangle Buffer", m_TotalTriangles, sizeof(GlobalTriangle), globalTris.data());
-
-        auto tEnd = std::chrono::high_resolution_clock::now();
-        m_CpuTimeBuildSpatialIndex = std::chrono::duration<float, std::milli>(tEnd - tStart).count();
     }
 
     void Gate::AllocateBuffers()
@@ -374,14 +431,14 @@ namespace Sponza
         std::vector<uint32_t> zeroDirty(m_UniqueSpatialVertexCount, 0);
         m_GateFeatureDirtyBuffer.Create(L"Feature Dirty Buffer", m_UniqueSpatialVertexCount, sizeof(uint32_t), zeroDirty.data());
 
-        // A. DUPLICATED BUFFER
+        // A. DUPLICATED FEATURE BUFFER
         uint32_t totalFeatureFloats = m_TotalMeshColorPoints * m_FeatureQuartets;
         std::vector<DirectX::XMFLOAT4> duplicatedFeatures(totalFeatureFloats);
         for (uint32_t i = 0; i < totalFeatureFloats; ++i)
             duplicatedFeatures[i] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
         m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalFeatureFloats, sizeof(DirectX::XMFLOAT4), duplicatedFeatures.data());
 
-        // B. UNIQUE BUFFERS
+        // B. UNIQUE FEATURE BUFFER
         uint32_t uniqueFeatureFloats = m_UniqueSpatialVertexCount * m_FeatureQuartets;
         std::vector<DirectX::XMFLOAT4> uniqueFeatures(uniqueFeatureFloats);
         for (uint32_t i = 0; i < uniqueFeatureFloats; ++i)
@@ -394,7 +451,13 @@ namespace Sponza
         m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", uniqueFeatureFloats, sizeof(DirectX::XMINT4), zeroFeatureGradients.data());
 
         // C. MLP PARAMETERS (Dynamic Calculation)
-        m_MlpParameterCount = (16 * (m_FeatureQuartets * 4) + 16) + 68;
+        // Architecture: 
+        // Layer 1: (Input Features -> 16 hidden nodes) + 16 biases
+        // Layer 2: (16 hidden nodes -> 4 output nodes) + 4 biases = 68 parameters
+        uint32_t layer1Params = (16 * (m_FeatureQuartets * 4)) + 16;
+        uint32_t layer2Params = 68;
+
+        m_MlpParameterCount = layer1Params + layer2Params;
         m_MlpQuartets = m_MlpParameterCount / 4;
 
         std::vector<float> initialWeights(m_MlpParameterCount);
@@ -422,7 +485,8 @@ namespace Sponza
         m_GateRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
-        D3D12_INPUT_ELEMENT_DESC vertElem[] = {
+        D3D12_INPUT_ELEMENT_DESC vertElem[] =
+        {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
             { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
             { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -453,24 +517,11 @@ namespace Sponza
         m_GateTrainRootSig[4].InitAsDescriptorTable(1);
         m_GateTrainRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1); // Bindless
 
-        m_GateTrainRootSig[5].InitAsBufferUAV(0);  // u0
-        m_GateTrainRootSig[6].InitAsBufferUAV(1);  // u1
-        m_GateTrainRootSig[7].InitAsBufferUAV(2);  // u2
-        m_GateTrainRootSig[8].InitAsBufferUAV(3);  // u3
-        m_GateTrainRootSig[9].InitAsBufferUAV(4);  // u4
-        m_GateTrainRootSig[10].InitAsBufferUAV(5); // u5
-        m_GateTrainRootSig[11].InitAsBufferUAV(6); // u6
-        m_GateTrainRootSig[12].InitAsBufferUAV(7); // u7 (Dirty Buffer)
+        for (UINT i = 0; i < 8; ++i)
+            m_GateTrainRootSig[5 + i].InitAsBufferUAV(i);
 
-        // Posunuté pùvodní SRVs
-        m_GateTrainRootSig[13].InitAsBufferSRV(3); // t3: VertexMappingBuffer
-        m_GateTrainRootSig[14].InitAsBufferSRV(4); // t4: UniqueFeatureBuffer
-        m_GateTrainRootSig[15].InitAsBufferSRV(5); // t5: TLAS pro Ray Queries
-
-        // PØIDÁNO: Nové SRVs pro Inverted Index
-        m_GateTrainRootSig[16].InitAsBufferSRV(6); // t6: Offset Buffer
-        m_GateTrainRootSig[17].InitAsBufferSRV(7); // t7: Count Buffer
-        m_GateTrainRootSig[18].InitAsBufferSRV(8); // t8: Duplicate Indices
+        for (UINT i = 0; i < 6; ++i)
+            m_GateTrainRootSig[13 + i].InitAsBufferSRV(3 + i);
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
@@ -508,7 +559,7 @@ namespace Sponza
 
     void Gate::Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection)
     {
-        if (m_IsTrainingPaused)
+        if (m_Config.isTrainingPaused)
             return;
 
         uint32_t zero = 0;
@@ -521,45 +572,21 @@ namespace Sponza
         trainCtx.SetRootSignature(m_GateTrainRootSig);
         trainCtx.SetDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, Renderer::s_TextureHeap.GetHeapPointer());
 
-        float actualFeatureLR = m_GlobalLearningRate * m_LearningRateRatio;
-        float actualMLPLR = m_GlobalLearningRate * (1.0f - m_LearningRateRatio) * 0.05f;
+        float actualFeatureLR = m_Config.globalLearningRate * m_Config.learningRateRatio;
+        float actualMLPLR = m_Config.globalLearningRate * (1.0f - m_Config.learningRateRatio) * 0.05f;
 
-        struct TrainingConstants
-        {
-            uint32_t trainingStep;
-            uint32_t totalTriangles;
-            float featureLearningRate;
-            float mlpLearningRate;
-            float adamEpsilon;
-            float adamBeta1;
-            float adamBeta2;
-            float weightDecay;
-            float screenSpaceRatio;
-            uint32_t VertexStride;
-            uint32_t uvOffset;
-            uint32_t screenWidth;
-            uint32_t screenHeight;
-            uint32_t totalMeshColorPoints;
-            float aoRadius;
-            uint32_t uniqueVertexCount;
-            DirectX::XMFLOAT3 sunDirection;
-            uint32_t featureFloats;
-            uint32_t featureQuartets;
-            uint32_t mlpQuartets;
-            uint32_t learningMode;
-            float maxGradientClip;
-        } cb = {
-            m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_AdamEpsilon,
-            m_AdamBeta1, m_AdamBeta2, m_WeightDecay, m_ScreenSpaceRatio, VertexStride, uvOffset,
+        TrainingConstants cb = {
+            m_TrainingStep, m_TotalTriangles, actualFeatureLR, actualMLPLR, m_Config.adamEpsilon,
+            m_Config.adamBeta1, m_Config.adamBeta2, m_Config.weightDecay, m_Config.screenSpaceRatio, VertexStride, uvOffset,
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
-            m_TotalMeshColorPoints, m_AoRadius, m_UniqueSpatialVertexCount,
+            m_TotalMeshColorPoints, m_Config.aoRadius, m_UniqueSpatialVertexCount,
             DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()),
-			m_FeatureFloats, m_FeatureQuartets, m_MlpQuartets,  m_LearningMode, m_MaxGradientClip
+            m_Config.featureFloats, m_FeatureQuartets, m_MlpQuartets, (uint32_t)m_Config.learningMode, m_Config.maxGradientClip
         };
+        trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
         trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
 
         // --- BACKPROP SETUP ---
-
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
         trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_VertexMappingBuffer.GetGpuVirtualAddress());
@@ -588,7 +615,7 @@ namespace Sponza
         // 1. Backprop
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0); // START 0
         trainCtx.SetPipelineState(m_GateBackpropPSO);
-        trainCtx.Dispatch(m_BackpropDispatchedGroups, 1, 1);
+        trainCtx.Dispatch(m_Config.backpropDispatchedGroups, 1, 1);
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1); // END 1
 
         trainCtx.InsertUAVBarrier(m_GateFeatureGradientBuffer);
@@ -613,7 +640,6 @@ namespace Sponza
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6);
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
         trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
-        // Zmìna rozlišení vláken:
         trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount, 1024), 1, 1);
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7);
 
@@ -623,38 +649,14 @@ namespace Sponza
         uint32_t* mappedData = (uint32_t*)m_LossReadbackBuffer.Map();
         if (mappedData)
         {
-            // Static variables for measuring time and averaging across frames
-            static auto lastRecordTime = std::chrono::high_resolution_clock::now();
-            static float accumulatedLoss = 0.0f;
-            static uint32_t lossSamples = 0;
-
-            // Calculate the loss for THIS specific frame
             float totalLoss = (float)(mappedData[0]) / 1000.0f;
-            float frameAverageLoss = totalLoss / (m_BackpropDispatchedGroups * 1024.0f);
+            float frameAverageLoss = totalLoss / (m_Config.backpropDispatchedGroups * 1024.0f);
 
-            // Accumulate the loss
-            accumulatedLoss += frameAverageLoss;
-            lossSamples++;
-
-            // Check elapsed time
-            auto currentTime = std::chrono::high_resolution_clock::now();
-            float elapsedTime = std::chrono::duration<float>(currentTime - lastRecordTime).count();
-
-            if (elapsedTime >= 0.1f)
-            {
-                m_LossHistory[m_LossHistoryOffset] = accumulatedLoss / (float)lossSamples;
-                m_LossHistoryOffset = (m_LossHistoryOffset + 1) % MAX_LOSS_HISTORY;
-
-                // Reset counters for the next interval
-                accumulatedLoss = 0.0f;
-                lossSamples = 0;
-                lastRecordTime = currentTime;
-            }
+            UpdateLossHistory(frameAverageLoss);
 
             m_LossReadbackBuffer.Unmap();
         }
 
-        // NOW we issue the GPU command to copy data from the CURRENT frame for the next readback
         trainCtx.TransitionResource(m_LossBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE);
         trainCtx.GetCommandList()->CopyResource(m_LossReadbackBuffer.GetResource(), m_LossBuffer.GetResource());
 
@@ -699,27 +701,24 @@ namespace Sponza
         gfxContext.SetBufferSRV(4, m_GlobalTriangleBuffer);
         gfxContext.SetDescriptorTable(5, m_Model->GetSRVs(0));
 
-        struct InferenceConstants
-        {
-            uint32_t globalTriangleOffset;
-            uint32_t lightingMode;
-            uint32_t renderFlags;
-            uint32_t materialIdx;
-
-            DirectX::XMFLOAT3 sunDirection;
-            float sunIntensity;
-
-            uint32_t featureFloats;
-            uint32_t featureQuartets;
-            float pad[2];
-
-            DirectX::XMFLOAT3 cameraPos;
-            float pad2;
-        };
-
         auto cmdList = gfxContext.GetCommandList();
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 8); // START 8
 
+        // 1. Calculate static frame properties ONCE outside the loop
+        uint32_t flags = 0;
+        if (m_Config.texturesEnabled)         flags |= (1 << 0);
+        if (m_Config.directionalLightEnabled) flags |= (1 << 1);
+
+        InferenceConstants cb = {};
+        cb.lightingMode = static_cast<uint32_t>(m_Config.lightingMode);
+        cb.renderFlags = flags;
+        cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
+        cb.sunIntensity = sunIntensity;
+        cb.featureFloats = m_Config.featureFloats;
+        cb.featureQuartets = m_FeatureQuartets;
+        cb.cameraPos = DirectX::XMFLOAT3(camera.GetPosition().GetX(), camera.GetPosition().GetY(), camera.GetPosition().GetZ());
+
+        // 2. Loop through meshes
         uint32_t globalTriangleOffset = 0;
         for (uint32_t meshIndex = 0; meshIndex < m_Model->GetMeshCount(); ++meshIndex)
         {
@@ -728,24 +727,9 @@ namespace Sponza
             uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
             uint32_t baseVertex = mesh.vertexDataByteOffset / m_Model->GetVertexStride();
 
-            // 2. Pack our booleans into the flags variable
-            uint32_t flags = 0;
-            if (m_TexturesEnabled)         flags |= (1 << 0); // Set 1st bit
-            if (m_DirectionalLightEnabled) flags |= (1 << 1); // Set 2nd bit
-
-            InferenceConstants cb;
+            // 3. Update ONLY what changes per mesh
             cb.globalTriangleOffset = globalTriangleOffset;
-            cb.lightingMode = static_cast<uint32_t>(m_LightingMode);
-            cb.renderFlags = flags;
             cb.materialIdx = mesh.materialIndex;
-
-            cb.sunDirection = DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ());
-            cb.sunIntensity = sunIntensity;
-
-			cb.featureFloats = m_FeatureFloats;
-			cb.featureQuartets = m_FeatureQuartets;
-
-            cb.cameraPos = DirectX::XMFLOAT3(camera.GetPosition().GetX(), camera.GetPosition().GetY(), camera.GetPosition().GetZ());
 
             gfxContext.SetConstantArray(3, sizeof(InferenceConstants) / 4, &cb);
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
@@ -754,43 +738,65 @@ namespace Sponza
         }
 
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 9); // END 9
-
-        // Resolve all 10 timestamps from the Heap to CPU-visible memory!
         cmdList->ResolveQueryData(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, m_GpuTimerReadback.Get(), 0);
     }
 
     // =========================================================================
-    // UI & Profiling
+    // UI & Profiling Helpers
     // =========================================================================
 
-    void Gate::RenderGUI()
+    void Gate::UpdateLossHistory(float frameAverageLoss)
     {
-        // --- READ GPU TIMESTAMPS (from previous frame) ---
+        static auto lastRecordTime = std::chrono::high_resolution_clock::now();
+        static float accumulatedLoss = 0.0f;
+        static uint32_t lossSamples = 0;
+
+        accumulatedLoss += frameAverageLoss;
+        lossSamples++;
+
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        float elapsedTime = std::chrono::duration<float>(currentTime - lastRecordTime).count();
+
+        // Update the graph every 100ms
+        if (elapsedTime >= 0.1f)
+        {
+            m_LossHistory[m_LossHistoryOffset] = accumulatedLoss / (float)lossSamples;
+            m_LossHistoryOffset = (m_LossHistoryOffset + 1) % MAX_LOSS_HISTORY;
+
+            accumulatedLoss = 0.0f;
+            lossSamples = 0;
+            lastRecordTime = currentTime;
+        }
+    }
+
+    void Gate::ReadbackGpuTimers()
+    {
         uint64_t* timestamps = nullptr;
         if (m_GpuTimerReadback && SUCCEEDED(m_GpuTimerReadback->Map(0, nullptr, (void**)&timestamps)))
         {
             if (m_GpuTimestampFreq > 0)
             {
-                double invFreq = 1000.0 / (double)m_GpuTimestampFreq; // Convert to milliseconds
+                double invFreq = 1000.0 / (double)m_GpuTimestampFreq; // ms
 
-                // Ignore data at application startup (when stamps are 0 or invalid)
-                if (timestamps[1] > timestamps[0])
-                    m_GpuTimeBackprop = m_GpuTimeBackprop * 0.9f + (float)((timestamps[1] - timestamps[0]) * invFreq) * 0.1f;
+                auto updateTimer = [&](float& trackingVar, int startIndex)
+                    {
+                        if (timestamps[startIndex + 1] > timestamps[startIndex])
+                            trackingVar = trackingVar * 0.9f + (float)((timestamps[startIndex + 1] - timestamps[startIndex]) * invFreq) * 0.1f;
+                    };
 
-                if (timestamps[3] > timestamps[2])
-                    m_GpuTimeOptMLP = m_GpuTimeOptMLP * 0.9f + (float)((timestamps[3] - timestamps[2]) * invFreq) * 0.1f;
-
-                if (timestamps[5] > timestamps[4])
-                    m_GpuTimeOptFeat = m_GpuTimeOptFeat * 0.9f + (float)((timestamps[5] - timestamps[4]) * invFreq) * 0.1f;
-
-                if (timestamps[7] > timestamps[6])
-                    m_GpuTimeBroadcast = m_GpuTimeBroadcast * 0.9f + (float)((timestamps[7] - timestamps[6]) * invFreq) * 0.1f;
-
-                if (timestamps[9] > timestamps[8])
-                    m_GpuTimeRender = m_GpuTimeRender * 0.9f + (float)((timestamps[9] - timestamps[8]) * invFreq) * 0.1f;
+                updateTimer(m_GpuTimeBackprop, 0);
+                updateTimer(m_GpuTimeOptMLP, 2);
+                updateTimer(m_GpuTimeOptFeat, 4);
+                updateTimer(m_GpuTimeBroadcast, 6);
+                updateTimer(m_GpuTimeRender, 8);
             }
             m_GpuTimerReadback->Unmap(0, nullptr);
         }
+    }
+
+    void Gate::RenderGUI()
+    {
+        ReadbackGpuTimers();
 
         // --- RENDER IMGUI ---
         ImGui::Begin("GATE Training Configuration");
@@ -811,7 +817,7 @@ namespace Sponza
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::Text("Training Loss (MSE)"); // Mean Squared Error
+        ImGui::Text("Training Loss (MSE)");
         float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
         char overlay[32];
         sprintf_s(overlay, "Loss: %.5f", currentLoss);
@@ -826,53 +832,53 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
-        ImGui::InputInt("Max Resolution Scale", &m_DesiredResolution, 1);
-        m_DesiredResolution = std::max(1, std::min(m_DesiredResolution, 1024));
-        ImGui::SliderInt("Feature Dimension", (int*)&m_DesiredFeatureFloats, 1, 32);
-        ImGui::Checkbox("Use Max Edge Length (Off = Average)", &m_DesiredUseMaxEdgeLength);
-        ImGui::Checkbox("Use Spatial Deduplication", &m_DesiredUseDeduplication);
+        ImGui::InputInt("Max Resolution Scale", &m_Config.desiredResolution, 1);
+        m_Config.desiredResolution = std::max(1, std::min(m_Config.desiredResolution, 1024));
+        ImGui::SliderInt("Feature Dimension", (int*)&m_Config.desiredFeatureFloats, 1, 32);
+        ImGui::Checkbox("Use Max Edge Length (Off = Average)", &m_Config.desiredUseMaxEdgeLength);
+        ImGui::Checkbox("Use Spatial Deduplication", &m_Config.desiredUseDeduplication);
 
-        if (m_DesiredResolution != (int)m_Resolution ||
-            m_DesiredFeatureFloats != m_FeatureFloats ||
-            m_DesiredUseMaxEdgeLength != m_UseMaxEdgeLength || // Updated Check
-            m_DesiredUseDeduplication != m_UseDeduplication)
+        if (m_Config.desiredResolution != (int)m_Config.resolution ||
+            m_Config.desiredFeatureFloats != m_Config.featureFloats ||
+            m_Config.desiredUseMaxEdgeLength != m_Config.useMaxEdgeLength ||
+            m_Config.desiredUseDeduplication != m_Config.useDeduplication)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Architecture changed! Reset training to apply.");
 
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
             ResetTraining();
 
-        ImGui::Checkbox("Pause Training", &m_IsTrainingPaused);
+        ImGui::Checkbox("Pause Training", &m_Config.isTrainingPaused);
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::SliderInt("Backprop Steps", &m_BackpropDispatchedGroups, 1, 1024, "%d Groups * 1024 Threads");
-        ImGui::SliderFloat("Screen Space Ratio", &m_ScreenSpaceRatio, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("AO Radius", &m_AoRadius, 10.0f, 1000.0f, "%.1f");
+        ImGui::SliderInt("Backprop Steps", &m_Config.backpropDispatchedGroups, 1, 1024, "%d Groups * 1024 Threads");
+        ImGui::SliderFloat("Screen Space Ratio", &m_Config.screenSpaceRatio, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("AO Radius", &m_Config.aoRadius, 10.0f, 1000.0f, "%.1f");
 
         // --- SMART UI LOGIC ---
         const char* learningModes[] = { "Learn AO + Shadows", "Learn AO Only", "Learn Shadows Only", "Learn Color (RGB Test)" };
-        if (ImGui::Combo("Learning Target", &m_LearningMode, learningModes, IM_ARRAYSIZE(learningModes)))
+        if (ImGui::Combo("Learning Target", &m_Config.learningMode, learningModes, IM_ARRAYSIZE(learningModes)))
         {
-            if (m_LearningMode == 1 && (m_LightingMode == 2 || m_LightingMode == 3)) m_LightingMode = 1;
-            else if (m_LearningMode == 2 && (m_LightingMode == 1 || m_LightingMode == 3)) m_LightingMode = 2;
-            else if (m_LearningMode == 3) m_LightingMode = 5; // Snap to the new Network RGB view
+            if (m_Config.learningMode == 1 && (m_Config.lightingMode == 2 || m_Config.lightingMode == 3)) m_Config.lightingMode = 1;
+            else if (m_Config.learningMode == 2 && (m_Config.lightingMode == 1 || m_Config.lightingMode == 3)) m_Config.lightingMode = 2;
+            else if (m_Config.learningMode == 3) m_Config.lightingMode = 5;
         }
 
         const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows", "Debug: Subdivision Grid", "Network RGB" };
-        if (ImGui::BeginCombo("Viewing Mode", lightingModes[m_LightingMode]))
+        if (ImGui::BeginCombo("Viewing Mode", lightingModes[m_Config.lightingMode]))
         {
             for (int i = 0; i < 6; i++)
             {
                 bool isValid = true;
-                if (m_LearningMode == 1 && (i == 2 || i == 3 || i == 5)) isValid = false;
-                if (m_LearningMode == 2 && (i == 1 || i == 3 || i == 5)) isValid = false;
-                if (m_LearningMode == 3 && (i >= 0 && i <= 3)) isValid = false; // When learning color, hide AO/Shadow views
+                if (m_Config.learningMode == 1 && (i == 2 || i == 3 || i == 5)) isValid = false;
+                if (m_Config.learningMode == 2 && (i == 1 || i == 3 || i == 5)) isValid = false;
+                if (m_Config.learningMode == 3 && (i >= 0 && i <= 3)) isValid = false;
 
                 if (isValid)
                 {
-                    bool isSelected = (m_LightingMode == i);
+                    bool isSelected = (m_Config.lightingMode == i);
                     if (ImGui::Selectable(lightingModes[i], isSelected))
-                        m_LightingMode = i;
+                        m_Config.lightingMode = i;
 
                     if (isSelected) ImGui::SetItemDefaultFocus();
                 }
@@ -880,19 +886,18 @@ namespace Sponza
             ImGui::EndCombo();
         }
 
-        // Add a helpful UI note so the user knows why the dropdown is restricted
-        if (m_LearningMode != 0)
+        if (m_Config.learningMode != 0)
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "* Viewing mode restricted to active learning target.");
 
-        ImGui::Checkbox("Textures Enabled", &m_TexturesEnabled);
-        ImGui::Checkbox("Directional Light Enabled", &m_DirectionalLightEnabled);
+        ImGui::Checkbox("Textures Enabled", &m_Config.texturesEnabled);
+        ImGui::Checkbox("Directional Light Enabled", &m_Config.directionalLightEnabled);
         ImGui::Spacing();
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::SliderFloat("Learning Rate", &m_GlobalLearningRate, 0.0001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("Features/MLP Ratio", &m_LearningRateRatio, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Max Gradient Clip", &m_MaxGradientClip, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Learning Rate", &m_Config.globalLearningRate, 0.0001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Features/MLP Ratio", &m_Config.learningRateRatio, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Max Gradient Clip", &m_Config.maxGradientClip, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic);
         ImGui::Spacing();
 
         ImGui::End();

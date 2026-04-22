@@ -27,47 +27,9 @@ namespace Sponza
         }
     };
 
-    struct Int3Hash
-    {
-        std::size_t operator()(const Int3& k) const
-        {
-            // Simple spatial hash
-            return ((k.x * 73856093) ^ (k.y * 19349663) ^ (k.z * 83492791));
-        }
-    };
-
     class Gate
     {
     public:
-        Gate();
-        ~Gate();
-
-        // --- Lifecycle ---
-        void Startup(const ModelH3D& model, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
-        void Cleanup();
-
-        // --- Execution ---
-        void Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection);
-        void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
-            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer,
-            Math::Vector3 sunDirection, float sunIntensity);
-        void RenderGUI();
-        void ResetTraining();
-
-        // --- Accessors ---
-        inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
-        inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
-
-        inline void SetIsTrainingPaused(bool isTrainingPaused) { m_IsTrainingPaused = isTrainingPaused; }
-        inline bool GetIsTrainingPaused() const { return m_IsTrainingPaused; }
-		inline void SetTexturesEnabled(bool enabled) { m_TexturesEnabled = enabled; }
-		inline bool GetTexturesEnabled() const { return m_TexturesEnabled; }
-    private:
-        // --- Initialization Helpers ---
-        void BuildSpatialIndex();
-        void AllocateBuffers();
-        void InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
-
         // --- GPU Data Structures ---
         struct GlobalTriangle
         {
@@ -86,58 +48,96 @@ namespace Sponza
             uint32_t pad[3];
         };
 
+    public:
+        Gate();
+        ~Gate();
+
+        // --- Lifecycle ---
+		void LoadModel(ModelH3D& model);
+        void Startup(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
+        void Cleanup();
+
+        // --- Execution ---
+        void Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection);
+        void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
+            const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer,
+            Math::Vector3 sunDirection, float sunIntensity);
+        void RenderGUI();
+        void ResetTraining();
+
+        // --- Accessors ---
+        inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
+        inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
+
+        inline void SetIsTrainingPaused(bool paused) { m_Config.isTrainingPaused = paused; }
+        inline bool GetIsTrainingPaused() const { return m_Config.isTrainingPaused; }
+        inline void SetTexturesEnabled(bool enabled) { m_Config.texturesEnabled = enabled; }
+        inline bool GetTexturesEnabled() const { return m_Config.texturesEnabled; }
+
+    private:
+        // --- Initialization Helpers ---
+        void BuildSpatialIndex();
+        void CalculateMeshEdgeLengths(std::vector<float>& outMeshMaxEdges, std::vector<float>& outMeshAvgEdges, float& outGlobalMaxEdge, float& outGlobalMaxAvgEdge);
+        void GenerateQuantizedPoints(const std::vector<float>& meshMaxEdges, const std::vector<float>& meshAvgEdges, float globalMaxEdge,
+            float globalMaxAvgEdge, std::vector<GlobalTriangle>& outGlobalTris, std::vector<Int3>& outQuantizedPositions, std::vector<uint32_t>& outPointToMeshMap);
+        void BuildInvertedSpatialIndex(std::vector<Int3>& quantizedPositions, std::vector<uint32_t>& pointToMeshMap, std::vector<uint32_t>& outDuplicateToUniqueMap);
+        void AllocateBuffers();
+        void InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
+
+        // --- Profiling & Stats Helpers ---
+        void ReadbackGpuTimers();
+        void UpdateLossHistory(float frameAverageLoss);
+
         // --- Core State ---
         const ModelH3D* m_Model = nullptr;
 
-        // --- Geometry Statistics ---
+        // --- Geometry ---
         uint32_t m_TotalVertices = 0;
         uint32_t m_TotalTriangles = 0;
         uint32_t m_TotalMeshColorPoints = 0;
         uint32_t m_UniqueSpatialVertexCount = 0;
 
-        // --- Hyperparameters & Training Configuration ---
-        bool     m_IsTrainingPaused = true;
+        struct GateConfig
+        {
+            bool     isTrainingPaused = true;
+            uint32_t resolution = 8;
+            int      desiredResolution = 0;
+            bool     useMaxEdgeLength = false;
+            bool     desiredUseMaxEdgeLength = false;
+            int      learningMode = 0;
+
+            uint32_t featureFloats = 4;
+            uint32_t desiredFeatureFloats = 0;
+
+            bool     useDeduplication = true;
+            bool     desiredUseDeduplication = true;
+
+            int      backpropDispatchedGroups = 1024;
+            float    globalLearningRate = 0.1f;
+            float    learningRateRatio = 0.5f;
+            float    maxGradientClip = 1.0f;
+            float    adamEpsilon = 1e-8f;
+            float    adamBeta1 = 0.9f;
+            float    adamBeta2 = 0.999f;
+            float    weightDecay = 0.01f;
+            float    screenSpaceRatio = 0.85f;
+            float    aoRadius = 150.0f;
+            int      lightingMode = 3;
+            bool     texturesEnabled = true;
+            bool     directionalLightEnabled = true;
+        };
+
+        GateConfig m_Config;
         uint32_t m_TrainingStep = 1;
-        uint32_t m_Resolution = 8;
-        int      m_DesiredResolution = 0;        // For UI
-        uint32_t m_PointsPerTri = 0;
-        bool     m_UseMaxEdgeLength = false;
-        bool     m_DesiredUseMaxEdgeLength = false;
-        int      m_LearningMode = 0;
-
-        // Add to your Hyperparameters section:
-        uint32_t m_FeatureFloats = 4;
-        uint32_t m_DesiredFeatureFloats = 0; // For UI
         uint32_t m_FeatureQuartets = 1;
-
-        bool m_UseDeduplication = true;
-        bool m_DesiredUseDeduplication = true;
-
-        // Add to track dynamic MLP size:
         uint32_t m_MlpParameterCount = 212;
         uint32_t m_MlpQuartets = 53;
 
-        int      m_BackpropDispatchedGroups = 1024; // * 1024 triangles per step
-        float    m_GlobalLearningRate = 0.1f;
-        float    m_LearningRateRatio = 0.5f;
-        float    m_MaxGradientClip = 1.0f;
-        float    m_AdamEpsilon = 1e-8f;
-        float    m_AdamBeta1 = 0.9f;
-        float    m_AdamBeta2 = 0.999f;
-        float    m_WeightDecay = 0.01f;
-        float    m_ScreenSpaceRatio = 0.85f;
-        float    m_AoRadius = 150.0f;
-        int      m_LightingMode = 3; // 0 = None, 1 = AO Only, 2 = Shadows Only, 3 = Both
-        bool     m_TexturesEnabled = true;
-        bool     m_DirectionalLightEnabled = true;
-
         // --- GPU Resources: Geometry & Features ---
         StructuredBuffer m_GlobalTriangleBuffer;          // Triangle metadata (indices, resolution, point offsets)
-
-        // Cache-coherency architecture buffers
         StructuredBuffer m_GateFeatureBuffer;             // Duplicated features for fast O(1) read during Inference
         StructuredBuffer m_UniqueFeatureBuffer;           // Unique features for safe atomic writes during Backprop
-		StructuredBuffer m_VertexMappingBuffer;           // Maps linear point indices to unique feature IDs, used for gradient accumulation in backrop
+        StructuredBuffer m_VertexMappingBuffer;           // Maps linear point indices to unique feature IDs
 
         StructuredBuffer m_GateFeatureGradientBuffer;     // Accumulated loss gradients for unique features
         StructuredBuffer m_GateFeatureAdamBuffer;         // AdamW optimizer state (mean, variance) for features
@@ -154,24 +154,20 @@ namespace Sponza
         StructuredBuffer m_DuplicateIndicesBuffer;        // Inverted index: flat array of all duplicate linear indices
 
         // --- Root Signatures & Pipeline States ---
-        // Inference Pipeline
         RootSignature     m_GateRootSig;
         GraphicsPSO       m_GatePSO;
         ColorBuffer       m_GateColorBuffer;
 
-        // Training Pipeline
         RootSignature     m_GateTrainRootSig;
         ComputePSO        m_GateBackpropPSO;
         ComputePSO        m_GateOptMLPPSO;
         ComputePSO        m_GateOptFeatPSO;
         ComputePSO        m_GateBroadcastPSO;
 
-        // Visualization Pipeline
         RootSignature     m_VisRootSig;
         ComputePSO        m_VisPSO;
         ColorBuffer       m_VisColorBuffer;
 
-        // Encoding Pipeline
         RootSignature     m_EncodeColorRootSig;
         ComputePSO        m_EncodeColorPSO;
 

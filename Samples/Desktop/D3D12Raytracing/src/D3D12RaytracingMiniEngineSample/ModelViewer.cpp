@@ -1429,7 +1429,6 @@ namespace GameCore
 
 void D3D12RaytracingMiniEngineSample::RenderImGui()
 {
-    // Begin the ImGui window
     Sponza::m_Gate.RenderGUI();
 
     ImGui::Begin("MiniEngine Raytracing Controls");
@@ -1514,14 +1513,10 @@ void D3D12RaytracingMiniEngineSample::RenderImGui()
 
     // File I/O buttons
     if (ImGui::Button("Save to File"))
-    {
         SaveCamerasToFile("cameras.txt");
-    }
     ImGui::SameLine();
     if (ImGui::Button("Load from File"))
-    {
         LoadCamerasFromFile("cameras.txt");
-    }
 
     ImGui::End();
 }

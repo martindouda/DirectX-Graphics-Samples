@@ -1,3 +1,5 @@
+// File: SponzaRenderer.cpp
+
 //
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
@@ -138,14 +140,12 @@ void Sponza::Startup(Camera& Camera)
     m_CutoutModelPSO.SetRasterizerState(RasterizerTwoSided);
     m_CutoutModelPSO.Finalize();
 
-    ASSERT(m_Model.Load(L"Sponza/sponza.h3d"), "Failed to load model");
-    //ASSERT(m_Model.Load(L"StanfordDragon/Dragon.h3d"), "Failed to load model");
-    //ASSERT(m_Model.Load(L"Table/Table.h3d"), "Failed to load model");
+	m_Gate.LoadModel(m_Model);
     ASSERT(m_Model.GetMeshCount() > 0, "Model contains no meshes");
 
 
     m_VisibilityBuffer.Create(L"Visibility Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R32_UINT);
-    m_Gate.Startup(m_Model, g_SceneColorBuffer.GetFormat(), g_SceneDepthBuffer.GetFormat());
+    m_Gate.Startup(g_SceneColorBuffer.GetFormat(), g_SceneDepthBuffer.GetFormat());
 
     // The caller of this function can override which materials are considered cutouts
     m_pMaterialIsCutout.resize(m_Model.GetMaterialCount());
@@ -212,29 +212,24 @@ void Sponza::RenderObjects( GraphicsContext& gfxContext, const Matrix4& ViewProj
         uint32_t startIndex = mesh.indexDataByteOffset / sizeof(uint16_t);
         uint32_t baseVertex = mesh.vertexDataByteOffset / VertexStride;
 
-        // Filter check: If this mesh doesn't belong in the current pass, skip drawing
         if (m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kCutout) ||
             !m_pMaterialIsCutout[mesh.materialIndex] && !(Filter & kOpaque))
         {
-            // CRITICAL: Still increment the offset so subsequent meshes get the correct ID!
             globalTriangleOffset += (indexCount / 3);
             continue;
         }
 
-        // Only update the SRV descriptor table when the material actually changes
         if (mesh.materialIndex != currentMaterialIdx)
         {
             currentMaterialIdx = mesh.materialIndex;
             gfxContext.SetDescriptorTable(Renderer::kMaterialSRVs, m_Model.GetSRVs(currentMaterialIdx));
         }
 
-        // Update the CBV every mesh to pass the new offset
         PerMeshConstants meshCB = { currentMaterialIdx, globalTriangleOffset };
         gfxContext.SetDynamicConstantBufferView(Renderer::kCommonCBV, sizeof(meshCB), &meshCB);
 
         gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
 
-        // Increment for the next mesh
         globalTriangleOffset += (indexCount / 3);
     }
 }
