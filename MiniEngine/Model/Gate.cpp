@@ -101,8 +101,8 @@ namespace Sponza
 
     void Gate::LoadModel(ModelH3D& model)
     {
-        //model.Load(L"Sponza/sponza.h3d");
-        model.Load(L"StanfordDragon/Dragon.h3d");
+        model.Load(L"Sponza/sponza.h3d");
+        //model.Load(L"StanfordDragon/Dragon.h3d");
         //model.Load(L"Table/Table.h3d");
         m_Model = &model;
 	}
@@ -866,7 +866,7 @@ namespace Sponza
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::SliderFloat("Learning Rate", &m_Config.globalLearningRate, 0.0001f, 0.1f, "%.6f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("Learning Rate", &m_Config.globalLearningRate, 0.001f, 0.05f, "%.6f", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("Features/MLP Ratio", &m_Config.learningRateRatio, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Max Gradient Clip", &m_Config.maxGradientClip, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic);
         ImGui::Spacing();

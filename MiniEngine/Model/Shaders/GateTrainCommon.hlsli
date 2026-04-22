@@ -1,36 +1,23 @@
-// File: GateTrainCommon.hlsli
-
-// =========================================================================
-//   Thread Group Sizes
-// =========================================================================
-
+// Thread group sizes
 #define BACKPROP_THREADGROUP_SIZE 1024
 #define OPTIMIZATION_MLP_THREADGROUP_SIZE 64
 #define OPTIMIZATION_FEATURES_THREADGROUP_SIZE 1024
 #define BROADCAST_THREADGROUP_SIZE 1024
 
-// =========================================================================
-//   Network Configuration
-// =========================================================================
-
+// Network layout
 #define LAYER_COUNT 3
 #define INPUT_LAYER 0
 #define HIDDEN_LAYER 1
 #define OUTPUT_LAYER 2
 
-// HLSL requires array bounds to be compile-time constants. 
-// We allocate the maximum possible memory for the dynamic arrays (8 quartets = 32 floats),
-// but at runtime, we only process up to the user-defined 'featureQuartets'.
+// Max memory bounds for dynamic arrays (8 quartets = 32 floats max)
 #define MAX_FEATURE_QUARTETS 8                      
-#define MAX_NEURON_QUARTETS_PER_LAYER 4             // Max 16 neurons / 4 floats per quartet
-#define ACTIVATION_QUARTETS_PER_NETWORK (MAX_FEATURE_QUARTETS + 4 + 1) // Dynamic Inputs + 16 hidden(4) + 4 outputs(1)
+#define MAX_NEURON_QUARTETS_PER_LAYER 4             
+#define ACTIVATION_QUARTETS_PER_NETWORK (MAX_FEATURE_QUARTETS + 4 + 1) 
 
+// Hyperparameters and fixed-point math scaling
 #define LEAKY_RELU_SLOPE 0.01f
-#define FLOAT4_PACKING_CONSTANT 16384.0f            // Scale for fixed-point atomic addition
-
-// =========================================================================
-//   Structures
-// =========================================================================
+#define FLOAT4_PACKING_CONSTANT 16384.0f            
 
 struct AdamData
 {
@@ -53,10 +40,6 @@ struct GateEncodingData
     float3 barycentrics;
     uint3 indices;
 };
-
-// =========================================================================
-//   Resources
-// =========================================================================
 
 #ifndef GATE_INFERENCE
 cbuffer RootConstantsCB : register(b0)
@@ -87,22 +70,12 @@ cbuffer RootConstantsCB : register(b0)
 #endif
 
 #ifdef GATE_INFERENCE
-// -------------------------------------------------------------------------
-//   INFERENCE RESOURCES
-// -------------------------------------------------------------------------
-
 StructuredBuffer<float4>            FeatureBuffer           : register(t0);
 StructuredBuffer<float4>            MLPParameterBuffer      : register(t1);
 StructuredBuffer<GlobalTriangle>    GlobalTriangleBuffer    : register(t2);
 Texture2D<float4>                   BindlessTextures[]      : register(t0, space1);
 SamplerState                        LinearSampler           : register(s0);
-
 #else
-// -------------------------------------------------------------------------
-//   TRAINING RESOURCES
-// -------------------------------------------------------------------------
-
-// --- SRVs (Read-Only) ---
 StructuredBuffer<GlobalTriangle> GlobalTriangleBuffer : register(t0);
 ByteAddressBuffer VertexUVBuffer : register(t1);
 Texture2D<uint> VisibilityBuffer : register(t2, space0);
@@ -116,26 +89,18 @@ StructuredBuffer<uint> DuplicateIndicesBuffer : register(t8);
 SamplerState LinearSampler : register(s0);
 Texture2D<float4> BindlessTextures[] : register(t0, space1);
 
-// --- UAVs (Read/Write) ---
-// This is an alias buffer. In OptimizeFeatures it points to the Unique features.
-// In BroadcastFeatures, it points to the Duplicated features.
 RWStructuredBuffer<float4> TargetFeatureBufferUAV : register(u0);
 RWStructuredBuffer<int4> FeatureGradientBuffer : register(u1);
 RWStructuredBuffer<AdamData> FeatureAdamBuffer : register(u2);
 
-// MLP
 RWStructuredBuffer<float4> MLPParameterBuffer : register(u3);
 RWStructuredBuffer<int4> MLPGradientBuffer : register(u4);
 RWStructuredBuffer<AdamData> MLPAdamBuffer : register(u5);
 RWByteAddressBuffer LossBuffer : register(u6);
 RWStructuredBuffer<uint> FeatureDirtyBuffer : register(u7);
-
 #endif
 
-// =========================================================================
-//   Helpers: RNG & Float Packing
-// =========================================================================
-
+// Fast RNG hashing
 uint pcgHash(uint v)
 {
     const uint state = v * 747796405u + 2891336453u;
@@ -151,27 +116,22 @@ float rand(inout uint rngState)
     return asfloat(0x3f800000 | (rngState >> 9)) - 1.0f;
 }
 
-// Convert back and forth between float4 and int4 for atomic thread-safe writes 
-// during the parallel backpropagation pass.
+// Convert float4 to int4 and back to allow atomic adds in compute shaders
 float4 unpackFloat4(int4 x)
 {
     return float4(x) / FLOAT4_PACKING_CONSTANT;
 }
-
 int4 packFloat4(float4 x)
 {
     return int4(x * FLOAT4_PACKING_CONSTANT);
 }
-
-// =========================================================================
-//   Geometry & Grid Helpers
-// =========================================================================
 
 uint get1DIndex(uint i, uint j, uint R)
 {
     return i * (R + 1) - i * (i - 1) / 2 + j;
 }
 
+// Calculate subdivision grid weights for spatial interpolation
 void getMeshColorIndicesAndWeights(float3 barycentrics, uint R,
                                    out uint i0, out uint j0, out float w0,
                                    out uint i1, out uint j1, out float w1,
@@ -226,28 +186,15 @@ void getMeshColorIndicesAndWeights(float3 barycentrics, uint R,
     }
 }
 
-// =========================================================================
-//   Activations (Shared)
-// =========================================================================
-
+// Vectorized activation functions
 float4 activationFunction(float4 v)
 {
-    return float4(
-        (v.x >= 0.0f) ? v.x : (v.x * LEAKY_RELU_SLOPE),
-        (v.y >= 0.0f) ? v.y : (v.y * LEAKY_RELU_SLOPE),
-        (v.z >= 0.0f) ? v.z : (v.z * LEAKY_RELU_SLOPE),
-        (v.w >= 0.0f) ? v.w : (v.w * LEAKY_RELU_SLOPE)
-    );
+    return max(v, v * LEAKY_RELU_SLOPE);
 }
 
 float4 activationFunctionDeriv(float4 v)
 {
-    return float4(
-        (v.x <= 0.0f) ? LEAKY_RELU_SLOPE : 1.0f,
-        (v.y <= 0.0f) ? LEAKY_RELU_SLOPE : 1.0f,
-        (v.z <= 0.0f) ? LEAKY_RELU_SLOPE : 1.0f,
-        (v.w <= 0.0f) ? LEAKY_RELU_SLOPE : 1.0f
-    );
+    return lerp((float4) LEAKY_RELU_SLOPE, (float4) 1.0f, step(0.0f, v));
 }
 
 float4 activationFunctionOutput(float4 v)
@@ -260,10 +207,7 @@ float4 activationFunctionOutputDeriv(float4 v)
     return v * (1.0f - v);
 }
 
-// =========================================================================
-//   MLP Forward Layer (Inference / Optimized)
-// =========================================================================
-
+// MLP forward pass layer execution
 void evalLayer(inout float4 previousActivations[MAX_FEATURE_QUARTETS], inout float4 currentActivations[MAX_FEATURE_QUARTETS],
     uint paramOffset, const uint neuronQuartetCountCurrentLayer, const uint neuronQuartetCountPreviousLayer, const uint layerType)
 {
@@ -286,13 +230,10 @@ void evalLayer(inout float4 previousActivations[MAX_FEATURE_QUARTETS], inout flo
 }
 
 #ifndef GATE_INFERENCE
-// =========================================================================
-//   TRAINING ONLY FUNCTIONS
-// =========================================================================
 
+// Safely accumulate gradients across threads using atomic additions
 void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint gradientIndex, float4 gradient)
 {
-    // Clip gradients to prevent exploding loss (NaNs)
     gradient = clamp(gradient, -0.5f, 0.5f);
     const int4 packed = packFloat4(gradient);
     InterlockedAdd(gradientTarget[gradientIndex].x, packed.x);
@@ -301,6 +242,7 @@ void accumulateGradient(RWStructuredBuffer<int4> gradientTarget, const uint grad
     InterlockedAdd(gradientTarget[gradientIndex].w, packed.w);
 }
 
+// Interpolate feature inputs for the active triangle
 void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK])
 {
     uint base0 = gateData.indices.x * featureQuartets;
@@ -315,7 +257,7 @@ void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, i
         
         float4 act = gateData.barycentrics.x * f0 + gateData.barycentrics.y * f1 + gateData.barycentrics.z * f2;
 
-        // MASKING: Zero out any floats beyond the user's requested dimension
+        // Mask off unallocated dimension channels
         if (q * 4 + 0 >= featureFloats)
             act.x = 0.0f;
         if (q * 4 + 1 >= featureFloats)
@@ -329,13 +271,14 @@ void gateEncoding(const GateEncodingData gateData, inout uint activationIndex, i
     }
 }
 
+// Push gradient errors back into the spatial feature grid
 void gateEncodingBackprop(const GateEncodingData gateData, inout float4 errors[ACTIVATION_QUARTETS_PER_NETWORK])
 {
     for (uint q = 0; q < featureQuartets; ++q)
     {
         float4 inputGrad = errors[q];
         
-        // MASKING: Prevent gradients from bleeding into unused features
+        // Prevent unused features from drifting via stray gradients
         if (q * 4 + 0 >= featureFloats)
             inputGrad.x = 0.0f;
         if (q * 4 + 1 >= featureFloats)
@@ -351,6 +294,7 @@ void gateEncodingBackprop(const GateEncodingData gateData, inout float4 errors[A
     }
 }
 
+// Execute forward pass (training version)
 void evalLayerActivations(inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], uint weightOffset, uint prevNeuronOffset, uint currNeuronOffset, uint currQuartets, uint prevQuartets, uint layerType)
 {
     for (uint q = 0; q < currQuartets; q++)
@@ -369,9 +313,9 @@ void evalLayerActivations(inout float4 activations[ACTIVATION_QUARTETS_PER_NETWO
     }
 }
 
+// Calculate gradients and propagate error backwards through the layer
 void backpropLayer(const float4 target, inout float4 activations[ACTIVATION_QUARTETS_PER_NETWORK], inout float4 errors[ACTIVATION_QUARTETS_PER_NETWORK], uint prevLayerQuartets, uint currLayerQuartets, uint prevOffset, uint currOffset, uint weightIndex, uint layerType)
 {
-    // Initialize the previous layer's error to 0 so we can accumulate the transposed weights into it
     for (uint pq = prevOffset; pq < prevOffset + prevLayerQuartets; pq++)
         errors[pq] = 0.0f;
 
@@ -379,41 +323,31 @@ void backpropLayer(const float4 target, inout float4 activations[ACTIVATION_QUAR
     {
         const float4 act = activations[q];
         float4 dCost_O = (layerType == OUTPUT_LAYER) ? (act - target) : errors[q];
-        
-        //const float4 dCost_Z = (layerType == HIDDEN_LAYER) ? (dCost_O * activationFunctionDeriv(act)) : dCost_O;
         const float4 dCost_Z = dCost_O * ((layerType == HIDDEN_LAYER) ? activationFunctionDeriv(act) : activationFunctionOutputDeriv(act));
         
-        // Weights Gradient & Error Backprop
         for (uint prevQ = prevOffset; prevQ < prevOffset + prevLayerQuartets; prevQ++)
         {
             const float4 prevAct = activations[prevQ];
-
-            // Load the 4 weight vectors for these 4 neurons
             float4 wX = MLPParameterBuffer[weightIndex];
             float4 wY = MLPParameterBuffer[weightIndex + 1];
             float4 wZ = MLPParameterBuffer[weightIndex + 2];
             float4 wW = MLPParameterBuffer[weightIndex + 3];
 
-            // Backpropagate error to the previous layer (Matrix Transpose equivalent)
             errors[prevQ] += wX * dCost_Z.x + wY * dCost_Z.y + wZ * dCost_Z.z + wW * dCost_Z.w;
 
-            // Accumulate weight gradients
             accumulateGradient(MLPGradientBuffer, weightIndex++, dCost_Z.x * prevAct);
             accumulateGradient(MLPGradientBuffer, weightIndex++, dCost_Z.y * prevAct);
             accumulateGradient(MLPGradientBuffer, weightIndex++, dCost_Z.z * prevAct);
             accumulateGradient(MLPGradientBuffer, weightIndex++, dCost_Z.w * prevAct);
         }
-        // Bias Gradient
         accumulateGradient(MLPGradientBuffer, weightIndex++, dCost_Z);
     }
 }
 
+// AdamW optimizer step calculation
 float4 ApplyAdam(float4 gradient, float4 currentValue, inout AdamData adamData, float lr, float wd)
 {
-    adamData.stepCount += 1;
-    
-    if (adamData.stepCount > 1024)
-        adamData.stepCount = 1024;
+    adamData.stepCount = min(adamData.stepCount + 1, 1024u);
     
     float localBeta1T = pow(adamBeta1, (float) adamData.stepCount);
     float localBeta2T = pow(adamBeta2, (float) adamData.stepCount);
@@ -424,13 +358,9 @@ float4 ApplyAdam(float4 gradient, float4 currentValue, inout AdamData adamData, 
     float4 correctedMean = adamData.mean / (1.0f - localBeta1T);
     float4 correctedVariance = adamData.variance / (1.0f - localBeta2T);
     
-    // 1. Standard Adam step
     float4 adamStep = correctedMean * rsqrt(correctedVariance + adamEpsilon);
-    
-    // 2. Decoupled Weight Decay (AdamW)
     float4 decayStep = currentValue * wd;
 
-    // 3. Apply learning rate to both
     return -lr * (adamStep + decayStep);
 }
 #endif // !GATE_INFERENCE

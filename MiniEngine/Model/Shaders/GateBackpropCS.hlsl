@@ -1,7 +1,6 @@
-// File: GateBackpropCS.hlsl
-
 #include "GateTrainCommon.hlsli"
 
+// Map uniform variables to a cosine-weighted direction for AO
 float3 getCosineHemisphereSample(float u1, float u2, float3 normal)
 {
     float r = sqrt(u1);
@@ -28,32 +27,24 @@ void main(uint3 DTid : SV_DispatchThreadID)
     uint lowestStepCount = 0xFFFFFFFF;
     bool foundValidCandidate = false;
 
-    float strategyRoll = rand(rng); 
-
-    // --- Active Learning Strategy ---
-    // Prioritizes training on pixels that are visible on-screen and have the 
-    // lowest Adam step count (meaning they have been trained the least).
-    if (strategyRoll < screenSpaceRatio) 
+    // Prioritize visible pixels with low Adam step counts
+    if (rand(rng) < screenSpaceRatio) 
     {
         for (int i = 0; i < 16; ++i)
         {
             uint2 pixelCoord = uint2((uint)(rand(rng) * screenWidth), (uint)(rand(rng) * screenHeight));
             uint rawID = VisibilityBuffer.Load(int3(pixelCoord, 0)).r;
 
-            if (rawID == 0) continue; // Skip Sky
+            if (rawID == 0) continue; 
 
             uint candidateTriID = rawID - 1;
-
             if (candidateTriID >= totalTriangles) continue;
 
             GlobalTriangle candidateTri = GlobalTriangleBuffer[candidateTriID];
-            uint baseIdx = candidateTri.pointOffset;
-            uint localPts = candidateTri.pointsPerTri;
+            uint randomPt = min((uint)(rand(rng) * candidateTri.pointsPerTri), candidateTri.pointsPerTri - 1);
             
-            uint randomPt = min((uint)(rand(rng) * localPts), localPts - 1);
-            uint uniquePt = VertexMappingBuffer[baseIdx + randomPt];
-
-            // Fetch the Adam step count from the first quartet of the vertex to determine age
+            // Check feature age via Adam step count
+            uint uniquePt = VertexMappingBuffer[candidateTri.pointOffset + randomPt];
             uint stepCount = FeatureAdamBuffer[uniquePt * featureQuartets].stepCount;
 
             if (stepCount < lowestStepCount)
@@ -63,16 +54,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 foundValidCandidate = true;
             }
         }
-
-        // Fallback to purely random exploration if no valid screen triangle was found
-        if (!foundValidCandidate) 
-            bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
     }
-    else
-    {
+
+    // Fallback to random uniform selection
+    if (!foundValidCandidate) 
         bestTriID = min((uint)(rand(rng) * totalTriangles), totalTriangles - 1);
-    }
 
+    // Uniform triangle sampling
     float u1 = rand(rng); 
     float u2 = rand(rng); 
     float sqrt_u1 = sqrt(u1);
@@ -82,92 +70,61 @@ void main(uint3 DTid : SV_DispatchThreadID)
     uint baseIndex = origTri.pointOffset;
     uint localRes = origTri.resolution;
 
+    // Resolve grid indices for interpolation
     uint i0, j0, i1, j1, i2, j2;
     float weight0, weight1, weight2;
     getMeshColorIndicesAndWeights(barycentrics, localRes, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
 
-    uint idx0 = get1DIndex(i0, j0, localRes);
-    uint idx1 = get1DIndex(i1, j1, localRes);
-    uint idx2 = get1DIndex(i2, j2, localRes);
-
     GateEncodingData gateData;
     gateData.barycentrics = float3(weight0, weight1, weight2);
-    gateData.indices.x = VertexMappingBuffer[baseIndex + idx0];
-    gateData.indices.y = VertexMappingBuffer[baseIndex + idx1];
-    gateData.indices.z = VertexMappingBuffer[baseIndex + idx2];
+    gateData.indices.x = VertexMappingBuffer[baseIndex + get1DIndex(i0, j0, localRes)];
+    gateData.indices.y = VertexMappingBuffer[baseIndex + get1DIndex(i1, j1, localRes)];
+    gateData.indices.z = VertexMappingBuffer[baseIndex + get1DIndex(i2, j2, localRes)];
     
+    // Evaluate DXR ground truth (Shadows and AO)
     float3 p0 = asfloat(VertexUVBuffer.Load3(origTri.i0 * VertexStride));
     float3 p1 = asfloat(VertexUVBuffer.Load3(origTri.i1 * VertexStride));
     float3 p2 = asfloat(VertexUVBuffer.Load3(origTri.i2 * VertexStride));
-
     float3 worldPos = barycentrics.x * p0 + barycentrics.y * p1 + barycentrics.z * p2;
 
-    // 1. Load the Vertex Normals (Offset by 20 bytes)
     float3 n0 = asfloat(VertexUVBuffer.Load3(origTri.i0 * VertexStride + 20));
     float3 n1 = asfloat(VertexUVBuffer.Load3(origTri.i1 * VertexStride + 20));
     float3 n2 = asfloat(VertexUVBuffer.Load3(origTri.i2 * VertexStride + 20));
-
-    // 2. Interpolate them using the barycentric weights to get perfectly smooth curves
     float3 smoothNormal = normalize(barycentrics.x * n0 + barycentrics.y * n1 + barycentrics.z * n2);
 
-    // --- DXR Inline Ray Tracing (Ground Truth Generation) ---
-    // 1. Trace a directional ray towards the sun for hard shadows
-    RayDesc shadowRay;
-    shadowRay.Origin = worldPos + smoothNormal * 0.05f;
-    shadowRay.Direction = sunDirection;
-    shadowRay.TMin = 0.0f;
-    shadowRay.TMax = 10000.0f;
-
+    // Trace shadow ray
+    RayDesc shadowRay = { worldPos + smoothNormal * 0.05f, 0.0f, sunDirection, 10000.0f };
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qShadow;
     qShadow.TraceRayInline(SceneBVH, 0, 0xFF, shadowRay);
     qShadow.Proceed();
     bool isShadowed = (qShadow.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
-    // 2. Trace a random cosine-weighted ray for Ambient Occlusion
-    float u3 = rand(rng);
-    float u4 = rand(rng);
-    float3 aoDirection = getCosineHemisphereSample(u3, u4, smoothNormal);
-
-    RayDesc aoRay;
-    aoRay.Origin = worldPos + smoothNormal * 0.05f;
-    aoRay.Direction = aoDirection;                
-    aoRay.TMin = 0.0f;
-    aoRay.TMax = aoRadius;                
-
+    // Trace AO ray
+    RayDesc aoRay = { worldPos + smoothNormal * 0.05f, 0.0f, getCosineHemisphereSample(rand(rng), rand(rng), smoothNormal), aoRadius };
     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qAO;
     qAO.TraceRayInline(SceneBVH, 0, 0xFF, aoRay);
     qAO.Proceed();
     bool isOccluded = (qAO.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
-    // --- Dynamic Network Mathematics ---
-    // The MLP buffer is a flat array of weights. We must calculate the offset for the output layer
-    // based on the dynamic feature size.
-    // Hidden Layer = 16 neurons. Output Layer = 4 neurons.
-    // Weight parameters for Hidden Layer = 16 neurons * featureQuartets inputs + 16 biases
-    // Since we process in quartets (groups of 4 floats), the offset is (16/4)*featureQuartets*4 + 16/4
-    // Which simplifies to: 16 * featureQuartets + 4
+    // Execute MLP forward pass
     uint hiddenOffset = 0;
     uint outputOffset = (16 * featureQuartets) + 4;
 
     float4 activations[ACTIVATION_QUARTETS_PER_NETWORK];
     uint activationIndex = 0;
     
-    // Evaluate Forward Pass
     gateEncoding(gateData, activationIndex, activations);                
-    evalLayerActivations(activations, hiddenOffset, 0,               featureQuartets,     4, featureQuartets, HIDDEN_LAYER);      
-    evalLayerActivations(activations, outputOffset, featureQuartets, featureQuartets + 4, 1, 4,               OUTPUT_LAYER);      
+    evalLayerActivations(activations, hiddenOffset, 0, featureQuartets, 4, featureQuartets, HIDDEN_LAYER);      
+    evalLayerActivations(activations, outputOffset, featureQuartets, featureQuartets + 4, 1, 4, OUTPUT_LAYER);      
 
-    float targetShadow = isShadowed ? 0.0f : 1.0f;
-    float targetAO = isOccluded ? 0.0f : 1.0f;
-    float4 targetInput = float4(targetShadow, targetAO, 0.0f, 0.0f);
+    // Determine target values based on learning mode
+    float4 targetInput = float4(isShadowed ? 0.0f : 1.0f, isOccluded ? 0.0f : 1.0f, 0.0f, 0.0f);
     
-    if (learningMode == 1) // AO only
-        targetInput.x = activations[featureQuartets + 4].x; // Ignore Shadows
-    else if (learningMode == 2) // Shadows Only
-        targetInput.y = activations[featureQuartets + 4].y; // Ignore AO
-    else if (learningMode == 3) // LEARN COLOR (RGB)
+    if (learningMode == 1) targetInput.x = activations[featureQuartets + 4].x;
+    else if (learningMode == 2) targetInput.y = activations[featureQuartets + 4].y;
+    else if (learningMode == 3)
     {
-        // 1. Fetch exact UVs and sample the Albedo
+        // Calculate true surface radiance for RGB target
         float2 uv0 = asfloat(VertexUVBuffer.Load2(origTri.i0 * VertexStride + uvOffset));
         float2 uv1 = asfloat(VertexUVBuffer.Load2(origTri.i1 * VertexStride + uvOffset));
         float2 uv2 = asfloat(VertexUVBuffer.Load2(origTri.i2 * VertexStride + uvOffset));
@@ -175,40 +132,34 @@ void main(uint3 DTid : SV_DispatchThreadID)
         float2 pixelUV = barycentrics.x * uv0 + barycentrics.y * uv1 + barycentrics.z * uv2;
         float3 albedo = BindlessTextures[origTri.materialIdx * 6 + 0].SampleLevel(LinearSampler, pixelUV, 0).rgb;
         
-        // 2. Calculate true surface Radiance (incorporating the ground-truth rays)
-        float NdotL = saturate(dot(smoothNormal, sunDirection));
+        float3 directLight = albedo * saturate(dot(smoothNormal, sunDirection)) * targetInput.x * 4.0f; 
+        float3 ambientLight = albedo * targetInput.y * 0.1f; 
         
-        // Note: 4.0f is the default sunIntensity from your C++ EngineTuning variables
-        float3 directLight = albedo * NdotL * targetShadow * 4.0f; 
-        float3 ambientLight = albedo * targetAO * 0.1f; // 0.1f is the Sponza ambient floor
-        
-        // 3. Set the combined outgoing light as the network's target
         targetInput.xyz = saturate(directLight + ambientLight);
         targetInput.w = activations[featureQuartets + 4].w;
     }
 
-    // Evaluate Backward Pass
+    // Backpropagate error through MLP
     float4 errors[ACTIVATION_QUARTETS_PER_NETWORK];
-    backpropLayer(targetInput, activations, errors, 4,               1, featureQuartets, featureQuartets + 4, outputOffset, OUTPUT_LAYER);   
-    backpropLayer(targetInput, activations, errors, featureQuartets, 4, 0,               featureQuartets,     hiddenOffset, HIDDEN_LAYER);   
+    backpropLayer(targetInput, activations, errors, 4, 1, featureQuartets, featureQuartets + 4, outputOffset, OUTPUT_LAYER);   
+    backpropLayer(targetInput, activations, errors, featureQuartets, 4, 0, featureQuartets, hiddenOffset, HIDDEN_LAYER);   
+    
+    // Distribute gradients to spatial features
     gateEncodingBackprop(gateData, errors);                                          
 
-    // Loss Accumulation for GUI visualization
-    float2 diff = targetInput.xy - activations[featureQuartets + 4].xy; 
+    // Accumulate MSE loss for GUI
     float pixelLoss = 0.0f;
-    
     if (learningMode == 3)
     {
-        // Calculate RGB error (3 channels)
         float3 diffRGB = targetInput.xyz - activations[featureQuartets + 4].xyz;
-        pixelLoss = dot(diffRGB, diffRGB) * 0.333f; // Average across 3 channels
+        pixelLoss = dot(diffRGB, diffRGB) * 0.333f;
     }
     else
     {
-        // Calculate Shadow/AO error (2 channels)
         float2 diff2 = targetInput.xy - activations[featureQuartets + 4].xy; 
-        pixelLoss = dot(diff2, diff2) * 0.5f; // Average across 2 channels
+        pixelLoss = dot(diff2, diff2) * 0.5f; 
     }
     
+    // Atomic float accumulation workaround
     LossBuffer.InterlockedAdd(0, (uint)(pixelLoss * 1000.0f));
 }

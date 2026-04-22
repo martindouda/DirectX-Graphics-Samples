@@ -112,7 +112,7 @@ namespace Sponza
             bool     desiredUseDeduplication = true;
 
             int      backpropDispatchedGroups = 1024;
-            float    globalLearningRate = 0.1f;
+            float    globalLearningRate = 0.05f;
             float    learningRateRatio = 0.5f;
             float    maxGradientClip = 1.0f;
             float    adamEpsilon = 1e-8f;

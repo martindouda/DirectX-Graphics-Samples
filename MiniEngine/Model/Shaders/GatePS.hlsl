@@ -1,5 +1,3 @@
-// File: GatePS.hlsl
-
 #define GATE_INFERENCE
 #include "GateTrainCommon.hlsli"
 
@@ -9,14 +7,11 @@ cbuffer MeshConstants : register(b1)
     uint lightingMode;
     uint renderFlags;
     uint materialIdx;
-
     float3 sunDirection;
     float sunIntensity;
-
     uint featureFloats;
     uint featureQuartets; 
     float2 pad;
-
     float3 cameraPos;
     float pad2;
 };
@@ -33,15 +28,13 @@ struct VSOutput
 
 float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
 {
-    uint globalTriID = primitiveID + globalTriangleOffset;
-    
-    GlobalTriangle triData = GlobalTriangleBuffer[globalTriID];
+    GlobalTriangle triData = GlobalTriangleBuffer[primitiveID + globalTriangleOffset];
     uint baseIndex = triData.pointOffset;
     uint localRes = triData.resolution;
 
+    // Resolve structural grid indices and weights for the current pixel
     uint i0, j0, i1, j1, i2, j2;
     float weight0, weight1, weight2;
-    
     getMeshColorIndicesAndWeights(barycentrics, localRes, i0, j0, weight0, i1, j1, weight1, i2, j2, weight2);
 
     uint flatIdx0 = (baseIndex + get1DIndex(i0, j0, localRes)) * featureQuartets;
@@ -51,20 +44,20 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     float4 activationsA[MAX_FEATURE_QUARTETS];
     float4 activationsB[MAX_FEATURE_QUARTETS];
     
-    for (uint i = 0; i < MAX_FEATURE_QUARTETS; i++) {
+    for (uint i = 0; i < MAX_FEATURE_QUARTETS; i++) 
+    {
         activationsA[i] = 0.0f;
         activationsB[i] = 0.0f;
     }
 
-    // Dynamic Network Input Interpolation
+    // Interpolate dynamic spatial features using structural barycentric coordinates
     for (uint q = 0; q < featureQuartets; ++q)
     { 
-        float4 d0 = FeatureBuffer[flatIdx0 + q];
-        float4 d1 = FeatureBuffer[flatIdx1 + q];
-        float4 d2 = FeatureBuffer[flatIdx2 + q];
-        
-        float4 act = weight0 * d0 + weight1 * d1 + weight2 * d2;
+        float4 act = weight0 * FeatureBuffer[flatIdx0 + q] + 
+                     weight1 * FeatureBuffer[flatIdx1 + q] + 
+                     weight2 * FeatureBuffer[flatIdx2 + q];
 
+        // Mask unused dimensionality bounds
         if (q * 4 + 0 >= featureFloats) act.x = 0.0f;
         if (q * 4 + 1 >= featureFloats) act.y = 0.0f;
         if (q * 4 + 2 >= featureFloats) act.z = 0.0f;
@@ -73,45 +66,32 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         activationsA[q] = act;
     }
 
-    // Dynamic Layer Evaluation
+    // Execute Multi-Layer Perceptron (MLP) forward pass
     uint outputLayerOffset = (16 * featureQuartets) + 4;
     evalLayer(activationsA, activationsB, 0,                 4, featureQuartets, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, outputLayerOffset, 1, 4,               OUTPUT_LAYER);
 
-    // Procedural subdivision wireframe
+    // Render procedural subdivision wireframe using screen-space derivatives
     if (lightingMode == 4)
     {
         float3 gridCoord = barycentrics * localRes;
-        float3 fw = fwidth(gridCoord); // Pixel thick regardless of how close/far the camera is
-        
-        float3 distToLine = abs(gridCoord - round(gridCoord));
-        float3 edge = distToLine / fw;
-        float edgeFactor = min(edge.x, min(edge.y, edge.z));
-        float lineIntensity = 1.0f - saturate(edgeFactor - 0.5f);
-        float3 baseColor = float3(0.1f, 0.1f, 0.12f); 
-        float3 lineColor = float3(0.0f, 1.0f, 0.5f); 
-        
-        return float4(lerp(baseColor, lineColor, lineIntensity), 1.0f);
+        float3 edge = abs(gridCoord - round(gridCoord)) / fwidth(gridCoord);
+        float lineIntensity = 1.0f - saturate(min(edge.x, min(edge.y, edge.z)) - 0.5f);
+        return float4(lerp(float3(0.1f, 0.1f, 0.12f), float3(0.0f, 1.0f, 0.5f), lineIntensity), 1.0f);
     }
+    
+    // Output raw network predictions (RGB target)
     if (lightingMode == 5)
-    {
-        float3 predictedColor = saturate(activationsA[0].xyz);
-        return float4(predictedColor, 1.0f);
-    }
+        return float4(saturate(activationsA[0].xyz), 1.0f);
 
-    float networkShadow = saturate(activationsA[0].x); 
-    float networkAO     = saturate(activationsA[0].y); 
-    
-    float shadowMask = 1.0f;
-    float aoMask = 1.0f;
-    
-    if (lightingMode == 1 || lightingMode == 3) aoMask = networkAO;
-    if (lightingMode == 2 || lightingMode == 3) shadowMask = networkShadow;
+    // Extract network predictions based on active visualization mode
+    float shadowMask = (lightingMode == 2 || lightingMode == 3) ? saturate(activationsA[0].x) : 1.0f;
+    float aoMask     = (lightingMode == 1 || lightingMode == 3) ? saturate(activationsA[0].y) : 1.0f;
     
     bool useTexturelessView      = (renderFlags & (1 << 0)) == 0;
     bool disableDirectionalLight = (renderFlags & (1 << 1)) == 0;
 
-    // --- TEXTURE SAMPLING ---
+    // Sample bindless material textures
     float4 albedo = BindlessTextures[materialIdx * 6 + 0].Sample(LinearSampler, input.UV);
     float specularMask = BindlessTextures[materialIdx * 6 + 1].Sample(LinearSampler, input.UV).g;
     
@@ -121,43 +101,29 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         specularMask = 0.5f; 
     }
     
-    float gloss = 128.0f;
-    float3 mapNormal = BindlessTextures[materialIdx * 6 + 3].Sample(LinearSampler, input.UV).rgb;
-    mapNormal = mapNormal * 2.0f - 1.0f;
-
-    float normalLenSq = dot(mapNormal, mapNormal);
-    float invNormalLen = rsqrt(normalLenSq);
-    mapNormal *= invNormalLen;
-    gloss = lerp(1.0f, gloss, rcp(invNormalLen));
+    // Evaluate tangent-space normal mapping
+    float3 mapNormal = BindlessTextures[materialIdx * 6 + 3].Sample(LinearSampler, input.UV).rgb * 2.0f - 1.0f;
+    float invNormalLen = rsqrt(dot(mapNormal, mapNormal));
+    float gloss = lerp(1.0f, 128.0f, rcp(invNormalLen));
 
     float3x3 tbn = float3x3(normalize(input.Tangent), normalize(input.Bitangent), normalize(input.Normal));
-    float3 N = normalize(mul(mapNormal, tbn));
+    float3 N = normalize(mul(mapNormal * invNormalLen, tbn));
 
-    // --- MINIENGINE EXACT LIGHTING MATH ---
-    float3 specularAlbedo = float3(0.56f, 0.56f, 0.56f);
+    // Evaluate physically-based analytical lighting model
     float3 L = normalize(sunDirection);
     float3 V = normalize(cameraPos - input.worldPos);
     float3 H = normalize(L + V);
 
-    float NdotL = saturate(dot(N, L));
-    float NdotH = saturate(dot(N, H));
+    float fSpecularLength = specularMask * pow(saturate(dot(N, H)), gloss);
+    float fDiffuseLength = saturate(dot(N, L));
 
-    float fSpecularLength = specularMask * pow(NdotH, gloss);
-    float fDiffuseLength = NdotL;
-
-    float3 sunColor = float3(1.0f, 1.0f, 1.0f) * sunIntensity;
-    
+    // Combine analytical lighting with implicit neural shadowing and occlusion
     float3 directLight = 0.0f;
     if (!disableDirectionalLight)
-        directLight = (fDiffuseLength * albedo.rgb + fSpecularLength * specularAlbedo) * sunColor * shadowMask;
+        directLight = (fDiffuseLength * albedo.rgb + fSpecularLength * float3(0.56f, 0.56f, 0.56f)) * (float3(1.0f, 1.0f, 1.0f) * sunIntensity) * shadowMask;
     
-    // MiniEngine Sponza defaults to exactly 0.1 ambient intensity
-    float3 ambientColor = float3(0.1f, 0.1f, 0.1f); 
-    if (disableDirectionalLight) ambientColor = float3(1.0f, 1.0f, 1.0f); // Boost if sun is off
-    
-    float3 ambientLight = albedo.rgb * ambientColor * aoMask; 
-    
-    float3 finalColor = directLight + ambientLight;
+    float3 ambientColor = disableDirectionalLight ? float3(1.0f, 1.0f, 1.0f) : float3(0.1f, 0.1f, 0.1f); 
+    float3 finalColor = directLight + (albedo.rgb * ambientColor * aoMask);
 
     return float4(finalColor, albedo.a);
 }
