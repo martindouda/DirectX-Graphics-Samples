@@ -21,7 +21,6 @@
 #include "CompiledShaders/GateBackpropCS.h"
 #include "CompiledShaders/GateOptimizeFeaturesCS.h"
 #include "CompiledShaders/GateOptimizeMLPCS.h"
-#include "CompiledShaders/VisBufferCS.h"
 #include "CompiledShaders/GateBroadcastCS.h"
 
 using namespace Math;
@@ -111,7 +110,6 @@ namespace Sponza
     void Gate::Startup(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
         m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
-        m_VisColorBuffer.Create(L"Visibility Vis Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, DXGI_FORMAT_R8G8B8A8_UNORM);
 
         m_LossHistory.resize(MAX_LOSS_HISTORY, 0.0f);
         m_LossBuffer.Create(L"Loss Buffer", 1, 4);
@@ -176,7 +174,6 @@ namespace Sponza
         m_DuplicateIndicesBuffer.Destroy();
 
         m_GateColorBuffer.Destroy();
-        m_VisColorBuffer.Destroy();
         m_LossBuffer.Destroy();
         m_LossReadbackBuffer.Destroy();
     }
@@ -541,16 +538,6 @@ namespace Sponza
         m_GateBroadcastPSO.SetRootSignature(m_GateTrainRootSig);
         m_GateBroadcastPSO.SetComputeShader(g_pGateBroadcastCS, sizeof(g_pGateBroadcastCS));
         m_GateBroadcastPSO.Finalize();
-
-        // 3. Setup Vis Buffer Root Sig
-        m_VisRootSig.Reset(2, 0);
-        m_VisRootSig[0].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, 1); // t0
-        m_VisRootSig[1].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 0, 1); // u0
-        m_VisRootSig.Finalize(L"Vis Buffer Root Sig");
-
-        m_VisPSO.SetRootSignature(m_VisRootSig);
-        m_VisPSO.SetComputeShader(g_pVisBufferCS, sizeof(g_pVisBufferCS));
-        m_VisPSO.Finalize();
     }
 
     // =========================================================================
@@ -663,26 +650,10 @@ namespace Sponza
         m_TrainingStep++;
     }
 
-    void Gate::RenderVisualization(GraphicsContext& gfxContext, const Camera& camera, DepthBuffer& depthBuffer,
+    void Gate::RenderInference(GraphicsContext& gfxContext, const Camera& camera, DepthBuffer& depthBuffer,
         const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer,
         Math::Vector3 sunDirection, float sunIntensity)
     {
-        ComputeContext& cptCtx = gfxContext.GetComputeContext();
-        cptCtx.SetRootSignature(m_VisRootSig);
-        cptCtx.SetPipelineState(m_VisPSO);
-
-        cptCtx.TransitionResource(visibilityBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        cptCtx.TransitionResource(m_VisColorBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-        cptCtx.SetDynamicDescriptor(0, 0, visibilityBuffer.GetSRV());
-        cptCtx.SetDynamicDescriptor(1, 0, m_VisColorBuffer.GetUAV());
-
-        uint32_t dispatchX = Math::DivideByMultiple(visibilityBuffer.GetWidth(), 8);
-        uint32_t dispatchY = Math::DivideByMultiple(visibilityBuffer.GetHeight(), 8);
-        cptCtx.Dispatch(dispatchX, dispatchY, 1);
-
-        cptCtx.TransitionResource(m_VisColorBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
         gfxContext.TransitionResource(m_GateColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
         gfxContext.ClearColor(m_GateColorBuffer);
 

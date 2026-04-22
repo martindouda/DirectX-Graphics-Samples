@@ -422,6 +422,6 @@ void Sponza::RenderScene(GraphicsContext& gfxContext, const Camera& camera, cons
 
     {
         ScopedTimer _prof2(L"Render GATE Visualization", gfxContext);
-        m_Gate.RenderVisualization(gfxContext, camera, g_SceneDepthBuffer, viewport, scissor, m_VisibilityBuffer, m_SunDirection, m_SunLightIntensity);
+        m_Gate.RenderInference(gfxContext, camera, g_SceneDepthBuffer, viewport, scissor, m_VisibilityBuffer, m_SunDirection, m_SunLightIntensity);
     }
 }

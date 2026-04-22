@@ -59,7 +59,7 @@ namespace Sponza
 
         // --- Execution ---
         void Train(ComputeContext& trainCtx, ColorBuffer& visibilityBuffer, Math::Vector3 sunDirection);
-        void RenderVisualization(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
+        void RenderInference(GraphicsContext& gfxContext, const Math::Camera& camera, DepthBuffer& depthBuffer,
             const D3D12_VIEWPORT& viewport, const D3D12_RECT& scissor, ColorBuffer& visibilityBuffer,
             Math::Vector3 sunDirection, float sunIntensity);
         void RenderGUI();
@@ -67,7 +67,6 @@ namespace Sponza
 
         // --- Accessors ---
         inline ColorBuffer& GetGateColorBuffer() { return m_GateColorBuffer; }
-        inline ColorBuffer& GetVisColorBuffer() { return m_VisColorBuffer; }
 
         inline void SetIsTrainingPaused(bool paused) { m_Config.isTrainingPaused = paused; }
         inline bool GetIsTrainingPaused() const { return m_Config.isTrainingPaused; }
@@ -163,10 +162,6 @@ namespace Sponza
         ComputePSO        m_GateOptMLPPSO;
         ComputePSO        m_GateOptFeatPSO;
         ComputePSO        m_GateBroadcastPSO;
-
-        RootSignature     m_VisRootSig;
-        ComputePSO        m_VisPSO;
-        ColorBuffer       m_VisColorBuffer;
 
         RootSignature     m_EncodeColorRootSig;
         ComputePSO        m_EncodeColorPSO;
