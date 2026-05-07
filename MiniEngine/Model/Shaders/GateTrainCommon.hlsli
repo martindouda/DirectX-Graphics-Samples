@@ -1,3 +1,14 @@
+// =========================================================================================
+// File: GateTrainCommon.hlsli
+//
+// ATTRIBUTION NOTICE:
+// A significant portion of the neural network mathematics (forward pass, backpropagation, 
+// and AdamW optimizer) in this file is derived and adapted from the MLPZen framework 
+// created by Jakub Bokšanský.
+//
+// Original source: https://github.com/boksajak/MLPZen/blob/master/src/shaders/MLPZen.hlsl
+// =========================================================================================
+
 // Thread group sizes
 #define BACKPROP_THREADGROUP_SIZE 1024
 #define OPTIMIZATION_MLP_THREADGROUP_SIZE 64
@@ -73,26 +84,29 @@ cbuffer RootConstantsCB : register(b0)
 StructuredBuffer<float4>            FeatureBuffer           : register(t0);
 StructuredBuffer<float4>            MLPParameterBuffer      : register(t1);
 StructuredBuffer<GlobalTriangle>    GlobalTriangleBuffer    : register(t2);
+
 Texture2D<float4>                   BindlessTextures[]      : register(t0, space1);
 SamplerState                        LinearSampler           : register(s0);
 #else
+// --- SRVs (t0 - t7) ---
 StructuredBuffer<GlobalTriangle> GlobalTriangleBuffer : register(t0);
 ByteAddressBuffer VertexUVBuffer : register(t1);
-Texture2D<uint> VisibilityBuffer : register(t2, space0);
-StructuredBuffer<uint> VertexMappingBuffer : register(t3);
-StructuredBuffer<float4> UniqueFeatureBuffer : register(t4);
-RaytracingAccelerationStructure SceneBVH : register(t5);
-StructuredBuffer<uint> UniqueToDuplicateOffsetBuffer : register(t6);
-StructuredBuffer<uint> UniqueToDuplicateCountBuffer : register(t7);
-StructuredBuffer<uint> DuplicateIndicesBuffer : register(t8);
+StructuredBuffer<uint> VertexMappingBuffer : register(t2);
+StructuredBuffer<float4> UniqueFeatureBuffer : register(t3);
+RaytracingAccelerationStructure SceneBVH : register(t4);
+StructuredBuffer<uint> UniqueToDuplicateOffsetBuffer : register(t5);
+StructuredBuffer<uint> UniqueToDuplicateCountBuffer : register(t6);
+StructuredBuffer<uint> DuplicateIndicesBuffer : register(t7);
 
-SamplerState LinearSampler : register(s0);
+// --- Descriptor Tables (t8, t0 space1) ---
+Texture2D<uint> VisibilityBuffer : register(t8, space0);
 Texture2D<float4> BindlessTextures[] : register(t0, space1);
+SamplerState LinearSampler : register(s0);
 
+// --- UAVs (u0 - u7) ---
 RWStructuredBuffer<float4> TargetFeatureBufferUAV : register(u0);
 RWStructuredBuffer<int4> FeatureGradientBuffer : register(u1);
 RWStructuredBuffer<AdamData> FeatureAdamBuffer : register(u2);
-
 RWStructuredBuffer<float4> MLPParameterBuffer : register(u3);
 RWStructuredBuffer<int4> MLPGradientBuffer : register(u4);
 RWStructuredBuffer<AdamData> MLPAdamBuffer : register(u5);

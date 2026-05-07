@@ -72,6 +72,10 @@ namespace Sponza
         inline bool GetIsTrainingPaused() const { return m_Config.isTrainingPaused; }
         inline void SetTexturesEnabled(bool enabled) { m_Config.texturesEnabled = enabled; }
         inline bool GetTexturesEnabled() const { return m_Config.texturesEnabled; }
+        inline void SetDirectionalLightEnabled(bool enabled) { m_Config.directionalLightEnabled = enabled; }
+        inline bool GetDirectionalLightEnabled() const { return m_Config.directionalLightEnabled; }
+        inline void SetShowSubdivisionGrid(bool show) { m_Config.showSubdivisionGrid = show; }
+        inline bool GetShowSubdivisionGrid() const { return m_Config.showSubdivisionGrid; }
 
     private:
         // --- Initialization Helpers ---
@@ -99,7 +103,7 @@ namespace Sponza
         struct GateConfig
         {
             bool     isTrainingPaused = true;
-            uint32_t resolution = 8;
+            uint32_t resolution = 32;
             int      desiredResolution = 0;
             bool     useMaxEdgeLength = false;
             bool     desiredUseMaxEdgeLength = false;
@@ -120,10 +124,11 @@ namespace Sponza
             float    adamBeta2 = 0.999f;
             float    weightDecay = 0.01f;
             float    screenSpaceRatio = 0.85f;
-            float    aoRadius = 150.0f;
+            float    aoRadius = 150.f;
             int      lightingMode = 3;
             bool     texturesEnabled = true;
             bool     directionalLightEnabled = true;
+            bool     showSubdivisionGrid = false;
         };
 
         GateConfig m_Config;
@@ -133,27 +138,27 @@ namespace Sponza
         uint32_t m_MlpQuartets = 53;
 
         // --- GPU Resources: Geometry & Features ---
-        StructuredBuffer m_GlobalTriangleBuffer;          // Triangle metadata (indices, resolution, point offsets)
-        StructuredBuffer m_GateFeatureBuffer;             // Duplicated features for fast O(1) read during Inference
-        StructuredBuffer m_UniqueFeatureBuffer;           // Unique features for safe atomic writes during Backprop
-        StructuredBuffer m_VertexMappingBuffer;           // Maps linear point indices to unique feature IDs
+        StructuredBuffer m_GlobalTriangleBuffer;            // Triangle metadata (indices, resolution, point offsets)
+        StructuredBuffer m_DuplicatedFeatureBuffer;         // Duplicated features for fast O(1) read during Inference
+        StructuredBuffer m_UniqueFeatureBuffer;             // Unique features for safe atomic writes during Backprop
+        StructuredBuffer m_VertexMappingBuffer;             // Maps linear point indices to unique feature IDs
 
-        StructuredBuffer m_GateFeatureGradientBuffer;     // Accumulated loss gradients for unique features
-        StructuredBuffer m_GateFeatureAdamBuffer;         // AdamW optimizer state (mean, variance) for features
+        StructuredBuffer m_UniqueFeatureGradientBuffer;     // Accumulated loss gradients for unique features
+        StructuredBuffer m_UniqueFeatureAdamBuffer;         // AdamW optimizer state (mean, variance) for features
 
         // --- GPU Resources: MLP ---
-        StructuredBuffer m_GateMLPBuffer;                 // Trainable weights and biases of the MLP network
-        StructuredBuffer m_GateMLPGradientBuffer;         // Accumulated loss gradients for MLP weights
-        StructuredBuffer m_GateMLPAdamBuffer;             // AdamW optimizer state for MLP weights
+        StructuredBuffer m_MLPBuffer;                       // Trainable weights and biases of the MLP network
+        StructuredBuffer m_MLPGradientBuffer;               // Accumulated loss gradients for MLP weights
+        StructuredBuffer m_MLPAdamBuffer;                   // AdamW optimizer state for MLP weights
 
         // --- GPU Resources: Sparse "Push" Broadcast Architecture ---
-        StructuredBuffer m_GateFeatureDirtyBuffer;        // Flags indicating which unique features were updated this frame
-        StructuredBuffer m_UniqueToDuplicateOffsetBuffer; // Inverted index: start offset for duplicates
-        StructuredBuffer m_UniqueToDuplicateCountBuffer;  // Inverted index: total duplicates per unique feature
-        StructuredBuffer m_DuplicateIndicesBuffer;        // Inverted index: flat array of all duplicate linear indices
+        StructuredBuffer m_UniqueFeatureDirtyBuffer;        // Flags indicating which unique features were updated this frame
+        StructuredBuffer m_UniqueToDuplicateOffsetBuffer;   // Inverted index: start offset for duplicates
+        StructuredBuffer m_UniqueToDuplicateCountBuffer;    // Inverted index: total duplicates per unique feature
+        StructuredBuffer m_DuplicateIndicesBuffer;          // Inverted index: flat array of all duplicate linear indices
 
         // --- Root Signatures & Pipeline States ---
-        RootSignature     m_GateRootSig;
+        RootSignature     m_GateInferenceRootSig;
         GraphicsPSO       m_GatePSO;
         ColorBuffer       m_GateColorBuffer;
 
@@ -162,9 +167,6 @@ namespace Sponza
         ComputePSO        m_GateOptMLPPSO;
         ComputePSO        m_GateOptFeatPSO;
         ComputePSO        m_GateBroadcastPSO;
-
-        RootSignature     m_EncodeColorRootSig;
-        ComputePSO        m_EncodeColorPSO;
 
         // --- Training Metrics (Loss Tracking) ---
         static const uint32_t MAX_LOSS_HISTORY = 100;

@@ -1,3 +1,5 @@
+// File: GateBroadcastCS.hlsl
+
 #include "GateTrainCommon.hlsli"
 
 // Sparse push broadcast: copies updated unique features to all spatially identical geometric duplicates

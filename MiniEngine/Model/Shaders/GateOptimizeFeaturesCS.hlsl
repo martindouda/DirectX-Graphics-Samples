@@ -1,3 +1,5 @@
+// File: GateOptimizeFeaturesCS.hlsl
+
 #include "GateTrainCommon.hlsli"
 
 // Applies Decoupled Weight Decay (AdamW) to the unique spatial feature grid in parallel

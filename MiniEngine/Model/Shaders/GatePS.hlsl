@@ -1,3 +1,5 @@
+// File: GatePS.hlsl
+
 #define GATE_INFERENCE
 #include "GateTrainCommon.hlsli"
 
@@ -71,8 +73,11 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     evalLayer(activationsA, activationsB, 0,                 4, featureQuartets, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, outputLayerOffset, 1, 4,               OUTPUT_LAYER);
 
-    // Render procedural subdivision wireframe using screen-space derivatives
-    if (lightingMode == 4)
+    // Unpack our new bit flag
+    bool showSubdivisionGrid = (renderFlags & (1 << 2)) != 0;
+
+    // EXCLUSIVE DEBUG VIEW: Early return to only show the grid
+    if (showSubdivisionGrid)
     {
         float3 gridCoord = barycentrics * localRes;
         float3 edge = abs(gridCoord - round(gridCoord)) / fwidth(gridCoord);
@@ -80,8 +85,8 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         return float4(lerp(float3(0.1f, 0.1f, 0.12f), float3(0.0f, 1.0f, 0.5f), lineIntensity), 1.0f);
     }
     
-    // Output raw network predictions (RGB target)
-    if (lightingMode == 5)
+    // Output raw network predictions (RGB target) Note: Index is now 4!
+    if (lightingMode == 4)
         return float4(saturate(activationsA[0].xyz), 1.0f);
 
     // Extract network predictions based on active visualization mode

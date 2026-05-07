@@ -1,0 +1,142 @@
+# Blender 4.4.3 MTL File: 'Table.blend'
+# www.blender.org
+
+newmtl AAC_CHAIR_Mat.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/AAC_CHAIR_Mat_Base_color.jpg
+map_Ns textures/AAC_CHAIR_Mat_Roughness.jpg
+
+newmtl Dry_Palm_Mat.001
+Ns 360.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+
+newmtl FLOOR.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/AQ_WoodenFloor_BaseColor.jpeg
+map_Ns textures/AQ_WoodenFloor_ROUGHNESS_2k.jpeg
+map_Bump -bm 1.000000 textures/AQ_WoodenFloor_NORMAL_2k.jpeg
+
+newmtl FRAME_01_Mat.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/FRAME_01_Mat_Base_color.jpg
+map_Ns textures/FRAME_01_Mat_Roughness.jpg
+map_Bump -bm 1.000000 textures/FRAME_01_Mat_Normal_OpenGL.jpg
+
+newmtl FRAME_02_Mat.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/FRAME_02_Mat_Base_color.jpg
+map_Ns textures/FRAME_02_Mat_Roughness.jpg
+
+newmtl LAMP_PINK_mat.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/LAMP_PINK_mat_Base_Color.jpg
+map_Ns textures/LAMP_PINK_mat_Roughness.jpg
+map_refl textures/LAMP_PINK_mat_Metallic.jpg
+map_Bump -bm 1.000000 textures/LAMP_PINK_mat_Normal_OpenGL.jpg
+
+newmtl LIGHT_PENDANT_Mat.002
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/LIGHT_PENDANT_Mat_Base_color.jpg
+map_Ns textures/LIGHT_PENDANT_Mat_Roughness.jpg
+map_refl textures/LIGHT_PENDANT_Mat_Metallic.jpg
+map_Bump -bm 1.000000 textures/LIGHT_PENDANT_Mat_Normal_OpenGL.jpg
+
+newmtl Material.002
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+
+newmtl PLATES_Mat.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/PLATES_Mat_Base_Color.jpg
+map_Ns textures/PLATES_Mat_Roughness.jpg
+map_Bump -bm 1.000000 textures/PLATES_Mat_Normal_OpenGL.jpg
+
+newmtl SIDEBOARD_Mat.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/SIDEBOARD_Mat_Base_color.jpg
+map_Ns textures/SIDEBOARD_Mat_Roughness.jpg
+map_Bump -bm 1.000000 textures/SIDEBOARD_Mat_Normal_OpenGL.jpg
+
+newmtl TABLE_WOOD.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/TABLE_WOOD_Base_color.jpg
+map_Ns textures/TABLE_WOOD_Roughness.jpg
+
+newmtl VASE_CYL_CERAMIC.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/VASE_CYL_CERAMIC_Base_Color.jpg
+map_Ns textures/VASE_CYL_CERAMIC_Roughness.jpg
+map_Bump -bm 1.000000 textures/VASE_CYL_CERAMIC_Normal_OpenGL.jpg
+
+newmtl WALL_Mat.001
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/AQ_CONCRETE_Roughness_.jpeg
+map_Ns textures/AQ_CONCRETE_Roughness_.jpeg
+map_Bump -bm 1.000000 textures/AQ_CONCRETE_NORMAL_.jpeg

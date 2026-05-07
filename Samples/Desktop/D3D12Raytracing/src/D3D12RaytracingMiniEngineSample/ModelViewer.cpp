@@ -69,10 +69,10 @@ using Microsoft::WRL::ComPtr;
 
 namespace Sponza
 {
-    extern StructuredBuffer m_GateFeatureBuffer;
-    extern ByteAddressBuffer m_GateFeatureGradientBuffer;
-    extern ByteAddressBuffer m_GateMLPBuffer;
-    extern ByteAddressBuffer m_GateMLPGradientBuffer;
+    extern StructuredBuffer m_DuplicatedFeatureBuffer;
+    extern ByteAddressBuffer m_UniqueFeatureGradientBuffer;
+    extern ByteAddressBuffer m_MLPBuffer;
+    extern ByteAddressBuffer m_MLPGradientBuffer;
 
     extern NumVar m_SunOrientation;
     extern NumVar m_SunInclination;
@@ -122,6 +122,9 @@ enum RaytracingTypes
 const static UINT MaxRayRecursion = 2;
 
 const static UINT c_NumCameraPositions = 5;
+
+bool m_RenderImGuiEnabled = true;
+
 
 struct RaytracingDispatchRayInputs
 {
@@ -926,6 +929,12 @@ void D3D12RaytracingMiniEngineSample::Update(float deltaT)
         Sponza::m_Gate.ResetTraining();
     if (GameInput::IsFirstPressed(GameInput::kKey_t))
         Sponza::m_Gate.SetTexturesEnabled(!Sponza::m_Gate.GetTexturesEnabled());
+    if (GameInput::IsFirstPressed(GameInput::kKey_g))
+        Sponza::m_Gate.SetShowSubdivisionGrid(!Sponza::m_Gate.GetShowSubdivisionGrid());
+    if (GameInput::IsFirstPressed(GameInput::kKey_y))
+        Sponza::m_Gate.SetDirectionalLightEnabled(!Sponza::m_Gate.GetDirectionalLightEnabled());
+    if (GameInput::IsFirstPressed(GameInput::kKey_u))
+        m_RenderImGuiEnabled = !m_RenderImGuiEnabled;
 
     if (GameInput::IsFirstPressed(GameInput::kLShoulder))
         DebugZoom.Decrement();
@@ -1429,7 +1438,11 @@ namespace GameCore
 
 void D3D12RaytracingMiniEngineSample::RenderImGui()
 {
-    Sponza::m_Gate.RenderGUI();
+    if (!m_RenderImGuiEnabled)
+        return;
+
+    if (rayTracingMode == RTM_GATE)
+        Sponza::m_Gate.RenderGUI();
 
     ImGui::Begin("MiniEngine Raytracing Controls");
 

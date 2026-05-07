@@ -85,7 +85,6 @@ namespace Sponza
         m_GateBackpropPSO(L"GATE: Backprop"),
         m_GateOptMLPPSO(L"GATE: Optimize MLP"),
         m_GateOptFeatPSO(L"GATE: Optimize Features"),
-        m_EncodeColorPSO(L"GATE: Encode UVs CS"),
         m_Model(nullptr)
     {
     }
@@ -101,9 +100,10 @@ namespace Sponza
 
     void Gate::LoadModel(ModelH3D& model)
     {
-        model.Load(L"Sponza/sponza.h3d");
+        //model.Load(L"Sponza/sponza.h3d");
+        //model.Load(L"Sponza/sponza_no_curtain_stripped.h3d");
         //model.Load(L"StanfordDragon/Dragon.h3d");
-        //model.Load(L"Table/Table.h3d");
+        model.Load(L"Table/Table.h3d");
         m_Model = &model;
 	}
 
@@ -155,20 +155,20 @@ namespace Sponza
 
     void Gate::Cleanup()
     {
-        m_GateFeatureBuffer.Destroy();
-        m_GateFeatureGradientBuffer.Destroy();
-        m_GateFeatureAdamBuffer.Destroy();
+        m_DuplicatedFeatureBuffer.Destroy();
+        m_UniqueFeatureGradientBuffer.Destroy();
+        m_UniqueFeatureAdamBuffer.Destroy();
 
-        m_GateMLPBuffer.Destroy();
-        m_GateMLPGradientBuffer.Destroy();
-        m_GateMLPAdamBuffer.Destroy();
+        m_MLPBuffer.Destroy();
+        m_MLPGradientBuffer.Destroy();
+        m_MLPAdamBuffer.Destroy();
 
         m_GlobalTriangleBuffer.Destroy();
 
         m_UniqueFeatureBuffer.Destroy();
         m_VertexMappingBuffer.Destroy();
 
-        m_GateFeatureDirtyBuffer.Destroy();
+        m_UniqueFeatureDirtyBuffer.Destroy();
         m_UniqueToDuplicateOffsetBuffer.Destroy();
         m_UniqueToDuplicateCountBuffer.Destroy();
         m_DuplicateIndicesBuffer.Destroy();
@@ -377,7 +377,7 @@ namespace Sponza
         if (m_TotalMeshColorPoints > 0)
         {
             outDuplicateToUniqueMap[sortIndices[0]] = 0;
-            for (size_t i = 1; i < m_TotalMeshColorPoints; ++i)
+            for (uint32_t i = 1; i < m_TotalMeshColorPoints; ++i)
             {
                 uint32_t currIdx = sortIndices[i];
                 uint32_t prevIdx = sortIndices[i - 1];
@@ -397,12 +397,12 @@ namespace Sponza
         }
 
         std::vector<uint32_t> uniqueCounts(m_UniqueSpatialVertexCount, 0);
-        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i)
+        for (uint32_t i = 0; i < m_TotalMeshColorPoints; ++i)
             uniqueCounts[outDuplicateToUniqueMap[i]]++;
 
         std::vector<uint32_t> uniqueOffsets(m_UniqueSpatialVertexCount, 0);
         uint32_t offset = 0;
-        for (size_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
+        for (uint32_t i = 0; i < m_UniqueSpatialVertexCount; ++i)
         {
             uniqueOffsets[i] = offset;
             offset += uniqueCounts[i];
@@ -410,7 +410,7 @@ namespace Sponza
 
         std::vector<uint32_t> currentOffsets = uniqueOffsets;
         std::vector<uint32_t> duplicateIndices(m_TotalMeshColorPoints);
-        for (size_t i = 0; i < m_TotalMeshColorPoints; ++i)
+        for (uint32_t i = 0; i < m_TotalMeshColorPoints; ++i)
         {
             uint32_t uniqueID = outDuplicateToUniqueMap[i];
             duplicateIndices[currentOffsets[uniqueID]++] = i;
@@ -426,14 +426,14 @@ namespace Sponza
         srand(1337);
 
         std::vector<uint32_t> zeroDirty(m_UniqueSpatialVertexCount, 0);
-        m_GateFeatureDirtyBuffer.Create(L"Feature Dirty Buffer", m_UniqueSpatialVertexCount, sizeof(uint32_t), zeroDirty.data());
+        m_UniqueFeatureDirtyBuffer.Create(L"Feature Dirty Buffer", m_UniqueSpatialVertexCount, sizeof(uint32_t), zeroDirty.data());
 
         // A. DUPLICATED FEATURE BUFFER
         uint32_t totalFeatureFloats = m_TotalMeshColorPoints * m_FeatureQuartets;
         std::vector<DirectX::XMFLOAT4> duplicatedFeatures(totalFeatureFloats);
         for (uint32_t i = 0; i < totalFeatureFloats; ++i)
             duplicatedFeatures[i] = DirectX::XMFLOAT4((float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX, (float)rand() / RAND_MAX);
-        m_GateFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalFeatureFloats, sizeof(DirectX::XMFLOAT4), duplicatedFeatures.data());
+        m_DuplicatedFeatureBuffer.Create(L"DUPLICATED Feature Buffer", totalFeatureFloats, sizeof(DirectX::XMFLOAT4), duplicatedFeatures.data());
 
         // B. UNIQUE FEATURE BUFFER
         uint32_t uniqueFeatureFloats = m_UniqueSpatialVertexCount * m_FeatureQuartets;
@@ -443,9 +443,9 @@ namespace Sponza
         m_UniqueFeatureBuffer.Create(L"UNIQUE Feature Buffer", uniqueFeatureFloats, sizeof(DirectX::XMFLOAT4), uniqueFeatures.data());
 
         std::vector<AdamData> initialFeatureAdam(uniqueFeatureFloats, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", uniqueFeatureFloats, sizeof(AdamData), initialFeatureAdam.data());
+        m_UniqueFeatureAdamBuffer.Create(L"UNIQUE Feature Adam Buffer", uniqueFeatureFloats, sizeof(AdamData), initialFeatureAdam.data());
         std::vector<DirectX::XMINT4> zeroFeatureGradients(uniqueFeatureFloats, { 0, 0, 0, 0 });
-        m_GateFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", uniqueFeatureFloats, sizeof(DirectX::XMINT4), zeroFeatureGradients.data());
+        m_UniqueFeatureGradientBuffer.Create(L"UNIQUE Feature Gradients", uniqueFeatureFloats, sizeof(DirectX::XMINT4), zeroFeatureGradients.data());
 
         // C. MLP PARAMETERS (Dynamic Calculation)
         // Architecture: 
@@ -460,27 +460,31 @@ namespace Sponza
         std::vector<float> initialWeights(m_MlpParameterCount);
         for (uint32_t i = 0; i < m_MlpParameterCount; ++i)
             initialWeights[i] = ((float)rand() / (float)RAND_MAX) * 0.2f - 0.1f;
-        m_GateMLPBuffer.Create(L"MLP Parameters", m_MlpQuartets, sizeof(DirectX::XMFLOAT4), initialWeights.data());
+        m_MLPBuffer.Create(L"MLP Parameters", m_MlpQuartets, sizeof(DirectX::XMFLOAT4), initialWeights.data());
         std::vector<DirectX::XMINT4> zeroMlpGradients(m_MlpQuartets, { 0, 0, 0, 0 });
-        m_GateMLPGradientBuffer.Create(L"MLP Gradients", m_MlpQuartets, sizeof(DirectX::XMINT4), zeroMlpGradients.data());
+        m_MLPGradientBuffer.Create(L"MLP Gradients", m_MlpQuartets, sizeof(DirectX::XMINT4), zeroMlpGradients.data());
 
         std::vector<AdamData> initialMLPAdam(m_MlpQuartets, { {0,0,0,0}, {0,0,0,0}, 0, {0,0,0} });
-        m_GateMLPAdamBuffer.Create(L"MLP Adam Buffer", m_MlpQuartets, sizeof(AdamData), initialMLPAdam.data());
+        m_MLPAdamBuffer.Create(L"MLP Adam Buffer", m_MlpQuartets, sizeof(AdamData), initialMLPAdam.data());
     }
 
     void Gate::InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
         // 1. Setup Inference PSO
-        m_GateRootSig.Reset(6, 1);
-        m_GateRootSig[0].InitAsConstantBuffer(0); // b0
-        m_GateRootSig[1].InitAsBufferSRV(0);      // t0 (FeatureBuffer)
-        m_GateRootSig[2].InitAsBufferSRV(1);      // t1 (MLP)
-        m_GateRootSig[3].InitAsConstants(1, 16);   // b1 (Inference Constants)
-        m_GateRootSig[4].InitAsBufferSRV(2);      // t2 (GlobalTriangleBuffer)
-        m_GateRootSig[5].InitAsDescriptorTable(1);
-        m_GateRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
-        m_GateRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
-        m_GateRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+        m_GateInferenceRootSig.Reset(6, 1);
+
+        m_GateInferenceRootSig[0].InitAsConstantBuffer(0);  // b0 (WVP)
+        m_GateInferenceRootSig[1].InitAsConstants(1, 16);   // b1 (Inference Constants)
+
+        m_GateInferenceRootSig[2].InitAsBufferSRV(0);       // t0 (FeatureBuffer)
+        m_GateInferenceRootSig[3].InitAsBufferSRV(1);       // t1 (MLP)
+        m_GateInferenceRootSig[4].InitAsBufferSRV(2);       // t2 (GlobalTriangleBuffer)
+
+        m_GateInferenceRootSig[5].InitAsDescriptorTable(1); // t0, space1
+        m_GateInferenceRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
+
+        m_GateInferenceRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
+        m_GateInferenceRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         D3D12_INPUT_ELEMENT_DESC vertElem[] =
         {
@@ -491,7 +495,7 @@ namespace Sponza
             { "BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
         };
 
-        m_GatePSO.SetRootSignature(m_GateRootSig);
+        m_GatePSO.SetRootSignature(m_GateInferenceRootSig);
         m_GatePSO.SetRasterizerState(RasterizerDefault);
         m_GatePSO.SetBlendState(BlendDisable);
         m_GatePSO.SetDepthStencilState(DepthStateTestEqual);
@@ -504,21 +508,22 @@ namespace Sponza
 
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(19, 1);
-        m_GateTrainRootSig[0].InitAsConstants(0, 24); // register(b0)
-        m_GateTrainRootSig[1].InitAsBufferSRV(0);     // TriangleBuffer register(t0)
-        m_GateTrainRootSig[2].InitAsBufferSRV(1);     // VertexUVBuffer register(t1)
 
-        m_GateTrainRootSig[3].InitAsDescriptorTable(1);
-        m_GateTrainRootSig[3].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 1, 0); // VisBuffer (t2)
+        m_GateTrainRootSig[0].InitAsConstants(0, 24);
 
-        m_GateTrainRootSig[4].InitAsDescriptorTable(1);
-        m_GateTrainRootSig[4].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1); // Bindless
+        for (UINT i = 0; i < 8; ++i) // [1-8] t0-t7: SRV (Read-only buffery)
+            m_GateTrainRootSig[1 + i].InitAsBufferSRV(i);
 
-        for (UINT i = 0; i < 8; ++i)
-            m_GateTrainRootSig[5 + i].InitAsBufferUAV(i);
+        for (UINT i = 0; i < 8; ++i) // [9-16] u0-u7: UAV (Read/Write buffery)
+            m_GateTrainRootSig[9 + i].InitAsBufferUAV(i);
 
-        for (UINT i = 0; i < 6; ++i)
-            m_GateTrainRootSig[13 + i].InitAsBufferSRV(3 + i);
+        // [17] t8: Visibility Buffer
+        m_GateTrainRootSig[17].InitAsDescriptorTable(1);
+        m_GateTrainRootSig[17].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 8, 1, 0);
+
+        // [18] t0, space1: Bindless Textures
+        m_GateTrainRootSig[18].InitAsDescriptorTable(1);
+        m_GateTrainRootSig[18].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
 
         m_GateTrainRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateTrainRootSig.Finalize(L"GATE Training Root Sig");
@@ -574,30 +579,31 @@ namespace Sponza
         trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
 
         // --- BACKPROP SETUP ---
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(13, m_VertexMappingBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(14, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(15, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
-
-        trainCtx.SetDynamicDescriptor(3, 0, visibilityBuffer.GetSRV());
-        trainCtx.SetDescriptorTable(4, m_Model->GetSRVs(0));
-
-        trainCtx.SetBufferUAV(5, m_UniqueFeatureBuffer);
-        trainCtx.SetBufferUAV(6, m_GateFeatureGradientBuffer);
-        trainCtx.SetBufferUAV(7, m_GateFeatureAdamBuffer);
-
-        trainCtx.SetBufferUAV(8, m_GateMLPBuffer);
-        trainCtx.SetBufferUAV(9, m_GateMLPGradientBuffer);
-        trainCtx.SetBufferUAV(10, m_GateMLPAdamBuffer);
-        trainCtx.SetBufferUAV(11, m_LossBuffer);
-
-        trainCtx.SetBufferUAV(12, m_GateFeatureDirtyBuffer);
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(16, m_UniqueToDuplicateOffsetBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(17, m_UniqueToDuplicateCountBuffer.GetGpuVirtualAddress());
-        trainCtx.GetCommandList()->SetComputeRootShaderResourceView(18, m_DuplicateIndicesBuffer.GetGpuVirtualAddress());
-
         auto cmdList = trainCtx.GetCommandList();
+
+        // 1-8: SRVs
+        cmdList->SetComputeRootShaderResourceView(1, m_GlobalTriangleBuffer.GetGpuVirtualAddress());
+        cmdList->SetComputeRootShaderResourceView(2, m_Model->GetVertexBuffer().BufferLocation);
+        cmdList->SetComputeRootShaderResourceView(3, m_VertexMappingBuffer.GetGpuVirtualAddress());
+        cmdList->SetComputeRootShaderResourceView(4, m_UniqueFeatureBuffer.GetGpuVirtualAddress());
+        cmdList->SetComputeRootShaderResourceView(5, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
+        cmdList->SetComputeRootShaderResourceView(6, m_UniqueToDuplicateOffsetBuffer.GetGpuVirtualAddress());
+        cmdList->SetComputeRootShaderResourceView(7, m_UniqueToDuplicateCountBuffer.GetGpuVirtualAddress());
+        cmdList->SetComputeRootShaderResourceView(8, m_DuplicateIndicesBuffer.GetGpuVirtualAddress());
+
+        // 9-16: UAVs
+        trainCtx.SetBufferUAV(9, m_UniqueFeatureBuffer);
+        trainCtx.SetBufferUAV(10, m_UniqueFeatureGradientBuffer);
+        trainCtx.SetBufferUAV(11, m_UniqueFeatureAdamBuffer);
+        trainCtx.SetBufferUAV(12, m_MLPBuffer);
+        trainCtx.SetBufferUAV(13, m_MLPGradientBuffer);
+        trainCtx.SetBufferUAV(14, m_MLPAdamBuffer);
+        trainCtx.SetBufferUAV(15, m_LossBuffer);
+        trainCtx.SetBufferUAV(16, m_UniqueFeatureDirtyBuffer);
+
+        // 17-18: Descriptor Tables
+        trainCtx.SetDynamicDescriptor(17, 0, visibilityBuffer.GetSRV());
+        trainCtx.SetDescriptorTable(18, m_Model->GetSRVs(0));
 
         // 1. Backprop
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0); // START 0
@@ -605,8 +611,8 @@ namespace Sponza
         trainCtx.Dispatch(m_Config.backpropDispatchedGroups, 1, 1);
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1); // END 1
 
-        trainCtx.InsertUAVBarrier(m_GateFeatureGradientBuffer);
-        trainCtx.InsertUAVBarrier(m_GateMLPGradientBuffer);
+        trainCtx.InsertUAVBarrier(m_UniqueFeatureGradientBuffer);
+        trainCtx.InsertUAVBarrier(m_MLPGradientBuffer);
 
         // 2. Optimize MLP
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2); // START 2
@@ -621,17 +627,17 @@ namespace Sponza
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 5); // END 5
 
         trainCtx.InsertUAVBarrier(m_UniqueFeatureBuffer);
-        trainCtx.InsertUAVBarrier(m_GateFeatureDirtyBuffer);
+        trainCtx.InsertUAVBarrier(m_UniqueFeatureDirtyBuffer);
 
         // 4. Broadcast
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6);
         trainCtx.SetPipelineState(m_GateBroadcastPSO);
-        trainCtx.SetBufferUAV(5, m_GateFeatureBuffer);
+        trainCtx.SetBufferUAV(9, m_DuplicatedFeatureBuffer);
         trainCtx.Dispatch(Math::DivideByMultiple(m_UniqueSpatialVertexCount, 1024), 1, 1);
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7);
 
-        trainCtx.TransitionResource(m_GateFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        trainCtx.TransitionResource(m_GateMLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        trainCtx.TransitionResource(m_DuplicatedFeatureBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        trainCtx.TransitionResource(m_MLPBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
         uint32_t* mappedData = (uint32_t*)m_LossReadbackBuffer.Map();
         if (mappedData)
@@ -658,19 +664,18 @@ namespace Sponza
         gfxContext.ClearColor(m_GateColorBuffer);
 
         gfxContext.SetPipelineState(m_GatePSO);
-        gfxContext.SetRootSignature(m_GateRootSig);
+        gfxContext.SetRootSignature(m_GateInferenceRootSig);
 
         Matrix4 wvp = camera.GetViewProjMatrix();
         gfxContext.SetDynamicConstantBufferView(0, sizeof(wvp), &wvp);
-        gfxContext.SetBufferSRV(1, m_GateFeatureBuffer);
-        gfxContext.SetBufferSRV(2, m_GateMLPBuffer);
+        gfxContext.SetBufferSRV(2, m_DuplicatedFeatureBuffer);
+        gfxContext.SetBufferSRV(3, m_MLPBuffer);
+        gfxContext.SetBufferSRV(4, m_GlobalTriangleBuffer);
+        gfxContext.SetDescriptorTable(5, m_Model->GetSRVs(0));
 
         D3D12_CPU_DESCRIPTOR_HANDLE gateRTVs[] = { m_GateColorBuffer.GetRTV() };
         gfxContext.SetRenderTargets(1, gateRTVs, depthBuffer.GetDSV_DepthReadOnly());
         gfxContext.SetViewportAndScissor(viewport, scissor);
-
-        gfxContext.SetBufferSRV(4, m_GlobalTriangleBuffer);
-        gfxContext.SetDescriptorTable(5, m_Model->GetSRVs(0));
 
         auto cmdList = gfxContext.GetCommandList();
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 8); // START 8
@@ -679,6 +684,7 @@ namespace Sponza
         uint32_t flags = 0;
         if (m_Config.texturesEnabled)         flags |= (1 << 0);
         if (m_Config.directionalLightEnabled) flags |= (1 << 1);
+        if (m_Config.showSubdivisionGrid)     flags |= (1 << 2);
 
         InferenceConstants cb = {};
         cb.lightingMode = static_cast<uint32_t>(m_Config.lightingMode);
@@ -702,7 +708,7 @@ namespace Sponza
             cb.globalTriangleOffset = globalTriangleOffset;
             cb.materialIdx = mesh.materialIndex;
 
-            gfxContext.SetConstantArray(3, sizeof(InferenceConstants) / 4, &cb);
+            gfxContext.SetConstantArray(1, sizeof(InferenceConstants) / 4, &cb);
             gfxContext.DrawIndexed(indexCount, startIndex, baseVertex);
 
             globalTriangleOffset += (indexCount / 3);
@@ -832,17 +838,17 @@ namespace Sponza
         {
             if (m_Config.learningMode == 1 && (m_Config.lightingMode == 2 || m_Config.lightingMode == 3)) m_Config.lightingMode = 1;
             else if (m_Config.learningMode == 2 && (m_Config.lightingMode == 1 || m_Config.lightingMode == 3)) m_Config.lightingMode = 2;
-            else if (m_Config.learningMode == 3) m_Config.lightingMode = 5;
+            else if (m_Config.learningMode == 3) m_Config.lightingMode = 4; // Shifted from 5 to 4
         }
 
-        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows", "Debug: Subdivision Grid", "Network RGB" };
+        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows", "Network RGB" };
         if (ImGui::BeginCombo("Viewing Mode", lightingModes[m_Config.lightingMode]))
         {
-            for (int i = 0; i < 6; i++)
+            for (int i = 0; i < 5; i++) // Shifted from 6 to 5
             {
                 bool isValid = true;
-                if (m_Config.learningMode == 1 && (i == 2 || i == 3 || i == 5)) isValid = false;
-                if (m_Config.learningMode == 2 && (i == 1 || i == 3 || i == 5)) isValid = false;
+                if (m_Config.learningMode == 1 && (i == 2 || i == 3 || i == 4)) isValid = false; // 5 changed to 4
+                if (m_Config.learningMode == 2 && (i == 1 || i == 3 || i == 4)) isValid = false; // 5 changed to 4
                 if (m_Config.learningMode == 3 && (i >= 0 && i <= 3)) isValid = false;
 
                 if (isValid)
@@ -860,8 +866,9 @@ namespace Sponza
         if (m_Config.learningMode != 0)
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "* Viewing mode restricted to active learning target.");
 
-        ImGui::Checkbox("Textures Enabled", &m_Config.texturesEnabled);
-        ImGui::Checkbox("Directional Light Enabled", &m_Config.directionalLightEnabled);
+        ImGui::Checkbox("Textures Enabled [T]", &m_Config.texturesEnabled);
+        ImGui::Checkbox("Directional Light Enabled [Y]", &m_Config.directionalLightEnabled);
+        ImGui::Checkbox("Show Mesh Triangles/Grid [G]", &m_Config.showSubdivisionGrid); // Add standalone UI checkbox
         ImGui::Spacing();
 
         ImGui::Separator();

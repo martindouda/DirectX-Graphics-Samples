@@ -1,3 +1,5 @@
+// File: GateVS.hlsl
+
 #define GATE_INFERENCE
 #include "GateTrainCommon.hlsli"
 

@@ -1,3 +1,5 @@
+// File: GateOptimizeMLPCS.hlsl
+
 #include "GateTrainCommon.hlsli"
 
 // Applies Decoupled Weight Decay (AdamW) to the MLP parameters in parallel

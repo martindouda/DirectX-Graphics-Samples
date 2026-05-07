@@ -1,3 +1,5 @@
+// File: GateBackpropCS.hlsl
+
 #include "GateTrainCommon.hlsli"
 
 // Map uniform variables to a cosine-weighted direction for AO
