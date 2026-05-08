@@ -100,10 +100,10 @@ namespace Sponza
 
     void Gate::LoadModel(ModelH3D& model)
     {
-        //model.Load(L"Sponza/sponza.h3d");
+        model.Load(L"Sponza/sponza.h3d");
         //model.Load(L"Sponza/sponza_no_curtain_stripped.h3d");
         //model.Load(L"StanfordDragon/Dragon.h3d");
-        model.Load(L"Table/Table.h3d");
+        //model.Load(L"Table/Table.h3d");
         m_Model = &model;
 	}
 
