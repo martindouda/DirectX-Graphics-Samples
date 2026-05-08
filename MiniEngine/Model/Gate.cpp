@@ -56,6 +56,10 @@ namespace
         uint32_t mlpQuartets;
         uint32_t learningMode;
         float maxGradientClip;
+        uint32_t aoSamples;
+        uint32_t shadowSamples;
+        float shadowSoftnessAngle;
+        float pad;
     };
 
     struct InferenceConstants
@@ -68,9 +72,13 @@ namespace
         float sunIntensity;
         uint32_t featureFloats;
         uint32_t featureQuartets;
-        float pad[2];
+        uint32_t aoSamples;
+        uint32_t shadowSamples;
         DirectX::XMFLOAT3 cameraPos;
-        float pad2;
+        float aoRadius;
+        float shadowSoftnessAngle;
+        uint32_t frameIndex;
+        float pad[2];
     };
 }
 
@@ -471,17 +479,19 @@ namespace Sponza
     void Gate::InitializePSOs(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
         // 1. Setup Inference PSO
-        m_GateInferenceRootSig.Reset(6, 1);
+        m_GateInferenceRootSig.Reset(7, 1);
 
         m_GateInferenceRootSig[0].InitAsConstantBuffer(0);  // b0 (WVP)
-        m_GateInferenceRootSig[1].InitAsConstants(1, 16);   // b1 (Inference Constants)
+        m_GateInferenceRootSig[1].InitAsConstants(1, 20);   // b1 (Inference Constants)
 
         m_GateInferenceRootSig[2].InitAsBufferSRV(0);       // t0 (FeatureBuffer)
         m_GateInferenceRootSig[3].InitAsBufferSRV(1);       // t1 (MLP)
         m_GateInferenceRootSig[4].InitAsBufferSRV(2);       // t2 (GlobalTriangleBuffer)
 
-        m_GateInferenceRootSig[5].InitAsDescriptorTable(1); // t0, space1
-        m_GateInferenceRootSig[5].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
+        m_GateInferenceRootSig[5].InitAsBufferSRV(3);       // t3 (SceneBVH)
+
+        m_GateInferenceRootSig[6].InitAsDescriptorTable(1); // t0, space1
+        m_GateInferenceRootSig[6].SetTableRange(0, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, (UINT)-1, 1);
 
         m_GateInferenceRootSig.InitStaticSampler(0, Graphics::SamplerLinearWrapDesc);
         m_GateInferenceRootSig.Finalize(L"Gate Inference Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
@@ -509,7 +519,7 @@ namespace Sponza
         // 2. Setup Training Root Sig & PSOs
         m_GateTrainRootSig.Reset(19, 1);
 
-        m_GateTrainRootSig[0].InitAsConstants(0, 24);
+        m_GateTrainRootSig[0].InitAsConstants(0, 28);
 
         for (UINT i = 0; i < 8; ++i) // [1-8] t0-t7: SRV (Read-only buffery)
             m_GateTrainRootSig[1 + i].InitAsBufferSRV(i);
@@ -573,7 +583,8 @@ namespace Sponza
             (uint32_t)g_SceneColorBuffer.GetWidth(), (uint32_t)g_SceneColorBuffer.GetHeight(),
             m_TotalMeshColorPoints, m_Config.aoRadius, m_UniqueSpatialVertexCount,
             DirectX::XMFLOAT3(sunDirection.GetX(), sunDirection.GetY(), sunDirection.GetZ()),
-            m_Config.featureFloats, m_FeatureQuartets, m_MlpQuartets, (uint32_t)m_Config.learningMode, m_Config.maxGradientClip
+            m_Config.featureFloats, m_FeatureQuartets, m_MlpQuartets, (uint32_t)m_Config.learningMode, m_Config.maxGradientClip,
+            (uint32_t)m_Config.aoSamples, (uint32_t)m_Config.shadowSamples, m_Config.shadowSoftnessAngle, 0
         };
         trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
         trainCtx.SetConstantArray(0, sizeof(TrainingConstants) / 4, &cb);
@@ -647,6 +658,16 @@ namespace Sponza
 
             UpdateLossHistory(frameAverageLoss);
 
+            // --- AUTO PAUSE LOGIC ---
+            if (m_Config.enableAutoPause && m_TrainingStep > 10)
+            {
+                float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
+
+                if (currentLoss > 0.000001f && currentLoss <= m_Config.autoPauseThreshold)
+                    m_Config.isTrainingPaused = true;
+            }
+            // ------------------------
+
             m_LossReadbackBuffer.Unmap();
         }
 
@@ -671,7 +692,8 @@ namespace Sponza
         gfxContext.SetBufferSRV(2, m_DuplicatedFeatureBuffer);
         gfxContext.SetBufferSRV(3, m_MLPBuffer);
         gfxContext.SetBufferSRV(4, m_GlobalTriangleBuffer);
-        gfxContext.SetDescriptorTable(5, m_Model->GetSRVs(0));
+        gfxContext.GetCommandList()->SetGraphicsRootShaderResourceView(5, g_bvh_topLevelAccelerationStructure->GetGPUVirtualAddress());
+        gfxContext.SetDescriptorTable(6, m_Model->GetSRVs(0));
 
         D3D12_CPU_DESCRIPTOR_HANDLE gateRTVs[] = { m_GateColorBuffer.GetRTV() };
         gfxContext.SetRenderTargets(1, gateRTVs, depthBuffer.GetDSV_DepthReadOnly());
@@ -685,6 +707,7 @@ namespace Sponza
         if (m_Config.texturesEnabled)         flags |= (1 << 0);
         if (m_Config.directionalLightEnabled) flags |= (1 << 1);
         if (m_Config.showSubdivisionGrid)     flags |= (1 << 2);
+        if (m_Config.showGroundTruth)         flags |= (1 << 3);
 
         InferenceConstants cb = {};
         cb.lightingMode = static_cast<uint32_t>(m_Config.lightingMode);
@@ -694,6 +717,12 @@ namespace Sponza
         cb.featureFloats = m_Config.featureFloats;
         cb.featureQuartets = m_FeatureQuartets;
         cb.cameraPos = DirectX::XMFLOAT3(camera.GetPosition().GetX(), camera.GetPosition().GetY(), camera.GetPosition().GetZ());
+        cb.aoSamples = (uint32_t)m_Config.aoSamples;
+        cb.shadowSamples = (uint32_t)m_Config.shadowSamples;
+        cb.aoRadius = m_Config.aoRadius;
+        cb.shadowSoftnessAngle = m_Config.shadowSoftnessAngle;
+        cb.frameIndex = (uint32_t)ImGui::GetFrameCount();;
+
 
         // 2. Loop through meshes
         uint32_t globalTriangleOffset = 0;
@@ -785,11 +814,11 @@ namespace Sponza
         ImGui::Text("Build Spatial Index (CPU): %.2f ms", m_CpuTimeBuildSpatialIndex);
         ImGui::Spacing();
         ImGui::TextDisabled("--- Real GPU Execution Time ---");
-        ImGui::Text("Backprop:      %.4f ms", m_GpuTimeBackprop);
-        ImGui::Text("Optimize MLP:  %.4f ms", m_GpuTimeOptMLP);
-        ImGui::Text("Optimize Feat: %.4f ms", m_GpuTimeOptFeat);
-        ImGui::Text("Broadcast:     %.4f ms", m_GpuTimeBroadcast);
-        ImGui::Text("Forward Render:%.4f ms", m_GpuTimeRender);
+        ImGui::Text("Backprop:       %8.4f ms", m_GpuTimeBackprop);
+        ImGui::Text("Optimize MLP:   %8.4f ms", m_GpuTimeOptMLP);
+        ImGui::Text("Optimize Feat:  %8.4f ms", m_GpuTimeOptFeat);
+        ImGui::Text("Broadcast:      %8.4f ms", m_GpuTimeBroadcast);
+        ImGui::Text("Forward Render: %8.4f ms", m_GpuTimeRender);
         ImGui::Spacing();
 
         ImGui::Separator();
@@ -825,12 +854,30 @@ namespace Sponza
             ResetTraining();
 
         ImGui::Checkbox("Pause Training", &m_Config.isTrainingPaused);
+        ImGui::SameLine();
+        ImGui::Checkbox("Auto-Pause on Target Loss", &m_Config.enableAutoPause);
+
+        if (m_Config.enableAutoPause)
+        {
+            ImGui::Indent();
+            ImGui::SliderFloat("Target MSE", &m_Config.autoPauseThreshold, 0.0001f, 0.05f, "%.5f", ImGuiSliderFlags_Logarithmic);
+            ImGui::Unindent();
+        }
 
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::SliderInt("Backprop Steps", &m_Config.backpropDispatchedGroups, 1, 1024, "%d Groups * 1024 Threads");
         ImGui::SliderFloat("Screen Space Ratio", &m_Config.screenSpaceRatio, 0.0f, 1.0f, "%.2f");
+        
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::Text("Learning Target Generation");
         ImGui::SliderFloat("AO Radius", &m_Config.aoRadius, 10.0f, 1000.0f, "%.1f");
+        ImGui::SliderInt("AO Samples", &m_Config.aoSamples, 1, 32);
+        ImGui::Spacing();
+        ImGui::SliderFloat("Shadow Softness Angle", &m_Config.shadowSoftnessAngle, 0.0f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderInt("Shadow Samples", &m_Config.shadowSamples, 1, 32);
+        ImGui::Spacing();
 
         // --- SMART UI LOGIC ---
         const char* learningModes[] = { "Learn AO + Shadows", "Learn AO Only", "Learn Shadows Only", "Learn Color (RGB Test)" };
@@ -838,17 +885,23 @@ namespace Sponza
         {
             if (m_Config.learningMode == 1 && (m_Config.lightingMode == 2 || m_Config.lightingMode == 3)) m_Config.lightingMode = 1;
             else if (m_Config.learningMode == 2 && (m_Config.lightingMode == 1 || m_Config.lightingMode == 3)) m_Config.lightingMode = 2;
-            else if (m_Config.learningMode == 3) m_Config.lightingMode = 4; // Shifted from 5 to 4
+            else if (m_Config.learningMode == 3) m_Config.lightingMode = 4;
         }
 
-        const char* lightingModes[] = { "No Shadows/AO", "AO Only", "Shadows Only", "AO + Shadows", "Network RGB" };
+        const char* lightingModes[] = {
+            "No Shadows/AO",
+            "AO Only",
+            "Shadows Only",
+            "AO + Shadows",
+            "Network RGB",
+        };
         if (ImGui::BeginCombo("Viewing Mode", lightingModes[m_Config.lightingMode]))
         {
-            for (int i = 0; i < 5; i++) // Shifted from 6 to 5
+            for (int i = 0; i < 5; i++)
             {
                 bool isValid = true;
-                if (m_Config.learningMode == 1 && (i == 2 || i == 3 || i == 4)) isValid = false; // 5 changed to 4
-                if (m_Config.learningMode == 2 && (i == 1 || i == 3 || i == 4)) isValid = false; // 5 changed to 4
+                if (m_Config.learningMode == 1 && (i == 2 || i == 3 || i == 4)) isValid = false;
+                if (m_Config.learningMode == 2 && (i == 1 || i == 3 || i == 4)) isValid = false;
                 if (m_Config.learningMode == 3 && (i >= 0 && i <= 3)) isValid = false;
 
                 if (isValid)
@@ -869,6 +922,7 @@ namespace Sponza
         ImGui::Checkbox("Textures Enabled [T]", &m_Config.texturesEnabled);
         ImGui::Checkbox("Directional Light Enabled [Y]", &m_Config.directionalLightEnabled);
         ImGui::Checkbox("Show Mesh Triangles/Grid [G]", &m_Config.showSubdivisionGrid); // Add standalone UI checkbox
+        ImGui::Checkbox("Show Ground Truth [H]", &m_Config.showGroundTruth);
         ImGui::Spacing();
 
         ImGui::Separator();

@@ -28,7 +28,7 @@
 
 // Hyperparameters and fixed-point math scaling
 #define LEAKY_RELU_SLOPE 0.01f
-#define FLOAT4_PACKING_CONSTANT 16384.0f            
+#define FLOAT4_PACKING_CONSTANT 16384.0f          
 
 struct AdamData
 {
@@ -77,6 +77,29 @@ cbuffer RootConstantsCB : register(b0)
     uint mlpQuartets;
     uint learningMode;
     float maxGradientClip;
+    uint aoSamples;
+    uint shadowSamples;
+    float shadowSoftnessAngle;
+    float pad;
+};
+#else
+cbuffer MeshConstants : register(b1) 
+{ 
+    uint globalTriangleOffset; 
+    uint lightingMode;
+    uint renderFlags;
+    uint materialIdx;
+    float3 sunDirection;
+    float sunIntensity;
+    uint featureFloats;
+    uint featureQuartets; 
+    uint aoSamples;
+    uint shadowSamples;
+    float3 cameraPos;
+    float aoRadius;
+    float shadowSoftnessAngle;
+    uint frameIndex;
+    float2 pad;
 };
 #endif
 
@@ -84,6 +107,7 @@ cbuffer RootConstantsCB : register(b0)
 StructuredBuffer<float4>            FeatureBuffer           : register(t0);
 StructuredBuffer<float4>            MLPParameterBuffer      : register(t1);
 StructuredBuffer<GlobalTriangle>    GlobalTriangleBuffer    : register(t2);
+RaytracingAccelerationStructure     SceneBVH                : register(t3);
 
 Texture2D<float4>                   BindlessTextures[]      : register(t0, space1);
 SamplerState                        LinearSampler           : register(s0);
@@ -113,6 +137,42 @@ RWStructuredBuffer<AdamData> MLPAdamBuffer : register(u5);
 RWByteAddressBuffer LossBuffer : register(u6);
 RWStructuredBuffer<uint> FeatureDirtyBuffer : register(u7);
 #endif
+
+// Uniformly samples a direction within a cone of angle 'coneAngle' (in radians) around 'dir'
+float3 getConeSample(float u1, float u2, float3 dir, float coneAngle)
+{
+    float cosTheta = cos(coneAngle);
+    float z = cosTheta + u1 * (1.0f - cosTheta); // Uniform distribution in solid angle
+    float r = sqrt(max(0.0f, 1.0f - z * z));
+    float phi = 2.0f * 3.14159265f * u2;
+    
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+    
+    // Create orthonormal basis around the primary direction
+    float3 up = abs(dir.z) < 0.999f ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(up, dir));
+    float3 bitangent = cross(dir, tangent);
+    
+    return tangent * x + bitangent * y + dir * z;
+}
+
+// Map uniform variables to a cosine-weighted direction for AO
+float3 getCosineHemisphereSample(float u1, float u2, float3 normal)
+{
+    float r = sqrt(u1);
+    float theta = 2.0f * 3.14159265f * u2;
+
+    float x = r * cos(theta);
+    float y = r * sin(theta);
+    float z = sqrt(max(0.0f, 1.0f - u1));
+
+    float3 up = abs(normal.z) < 0.999f ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(up, normal));
+    float3 bitangent = cross(normal, tangent);
+
+    return tangent * x + bitangent * y + normal * z;
+}
 
 // Fast RNG hashing
 uint pcgHash(uint v)

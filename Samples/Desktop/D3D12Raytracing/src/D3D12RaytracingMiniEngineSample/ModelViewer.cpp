@@ -935,6 +935,8 @@ void D3D12RaytracingMiniEngineSample::Update(float deltaT)
         Sponza::m_Gate.SetDirectionalLightEnabled(!Sponza::m_Gate.GetDirectionalLightEnabled());
     if (GameInput::IsFirstPressed(GameInput::kKey_u))
         m_RenderImGuiEnabled = !m_RenderImGuiEnabled;
+    if (GameInput::IsFirstPressed(GameInput::kKey_h))
+        Sponza::m_Gate.SetShowGroundTruthEnabled(!Sponza::m_Gate.GetShowGroundTruthEnabled());
 
     if (GameInput::IsFirstPressed(GameInput::kLShoulder))
         DebugZoom.Decrement();

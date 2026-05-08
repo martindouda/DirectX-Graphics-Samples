@@ -2,22 +2,6 @@
 
 #include "GateTrainCommon.hlsli"
 
-// Map uniform variables to a cosine-weighted direction for AO
-float3 getCosineHemisphereSample(float u1, float u2, float3 normal)
-{
-    float r = sqrt(u1);
-    float theta = 2.0f * 3.14159265f * u2;
-
-    float x = r * cos(theta);
-    float y = r * sin(theta);
-    float z = sqrt(max(0.0f, 1.0f - u1));
-
-    float3 up = abs(normal.z) < 0.999f ? float3(0, 0, 1) : float3(1, 0, 0);
-    float3 tangent = normalize(cross(up, normal));
-    float3 bitangent = cross(normal, tangent);
-
-    return tangent * x + bitangent * y + normal * z;
-}
 
 [numthreads(BACKPROP_THREADGROUP_SIZE, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
@@ -94,19 +78,35 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float3 n2 = asfloat(VertexUVBuffer.Load3(origTri.i2 * VertexStride + 20));
     float3 smoothNormal = normalize(barycentrics.x * n0 + barycentrics.y * n1 + barycentrics.z * n2);
 
-    // Trace shadow ray
-    RayDesc shadowRay = { worldPos + smoothNormal * 0.05f, 0.0f, sunDirection, 10000.0f };
-    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qShadow;
-    qShadow.TraceRayInline(SceneBVH, 0, 0xFF, shadowRay);
-    qShadow.Proceed();
-    bool isShadowed = (qShadow.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
+    // Trace shadow ray(s)
+    const float SHADOW_SOFTNESS_ANGLE = 0.05f; 
+    float shadowAccumulation = 0.0f;
+    for (uint s = 0; s < shadowSamples; ++s)
+    {
+        // Jitter the sun direction using our PRNG
+        
+        float3 jitteredSunDir = getConeSample(rand(rng), rand(rng), sunDirection, shadowSoftnessAngle);
 
-    // Trace AO ray
-    RayDesc aoRay = { worldPos + smoothNormal * 0.05f, 0.0f, getCosineHemisphereSample(rand(rng), rand(rng), smoothNormal), aoRadius };
-    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qAO;
-    qAO.TraceRayInline(SceneBVH, 0, 0xFF, aoRay);
-    qAO.Proceed();
-    bool isOccluded = (qAO.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
+        RayDesc shadowRay = { worldPos + smoothNormal * 0.05f, 0.0f, jitteredSunDir, 10000.0f };
+        RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qShadow;
+        qShadow.TraceRayInline(SceneBVH, 0, 0xFF, shadowRay);
+        qShadow.Proceed();
+        
+        shadowAccumulation += (qShadow.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
+    }
+    float shadowMask = shadowAccumulation / max(1.0f, (float)shadowSamples);
+
+    // Trace AO ray(s)
+    float aoAccumulation = 0.0f;
+    for (uint a = 0; a < aoSamples; ++a)
+    {
+        RayDesc aoRay = { worldPos + smoothNormal * 0.05f, 0.0f, getCosineHemisphereSample(rand(rng), rand(rng), smoothNormal), aoRadius };
+        RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qAO;
+        qAO.TraceRayInline(SceneBVH, 0, 0xFF, aoRay);
+        qAO.Proceed();
+        aoAccumulation += (qAO.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
+    }
+    float aoMask = aoAccumulation / max(1.0f, (float)aoSamples);
 
     // Execute MLP forward pass
     uint hiddenOffset = 0;
@@ -120,7 +120,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     evalLayerActivations(activations, outputOffset, featureQuartets, featureQuartets + 4, 1, 4, OUTPUT_LAYER);      
 
     // Determine target values based on learning mode
-    float4 targetInput = float4(isShadowed ? 0.0f : 1.0f, isOccluded ? 0.0f : 1.0f, 0.0f, 0.0f);
+    float4 targetInput = float4(shadowMask, aoMask, 0.0f, 0.0f);
     
     if (learningMode == 1) targetInput.x = activations[featureQuartets + 4].x;
     else if (learningMode == 2) targetInput.y = activations[featureQuartets + 4].y;

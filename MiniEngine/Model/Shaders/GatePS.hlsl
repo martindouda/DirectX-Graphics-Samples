@@ -3,20 +3,6 @@
 #define GATE_INFERENCE
 #include "GateTrainCommon.hlsli"
 
-cbuffer MeshConstants : register(b1) 
-{ 
-    uint globalTriangleOffset; 
-    uint lightingMode;
-    uint renderFlags;
-    uint materialIdx;
-    float3 sunDirection;
-    float sunIntensity;
-    uint featureFloats;
-    uint featureQuartets; 
-    float2 pad;
-    float3 cameraPos;
-    float pad2;
-};
 
 struct VSOutput 
 {
@@ -73,10 +59,11 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     evalLayer(activationsA, activationsB, 0,                 4, featureQuartets, HIDDEN_LAYER);
     evalLayer(activationsB, activationsA, outputLayerOffset, 1, 4,               OUTPUT_LAYER);
 
-    // Unpack our new bit flag
-    bool showSubdivisionGrid = (renderFlags & (1 << 2)) != 0;
+    bool useTexturelessView      = (renderFlags & (1 << 0)) == 0;
+    bool disableDirectionalLight = (renderFlags & (1 << 1)) == 0;
 
-    // EXCLUSIVE DEBUG VIEW: Early return to only show the grid
+    // Early return to only show the grid
+    bool showSubdivisionGrid = (renderFlags & (1 << 2)) != 0;
     if (showSubdivisionGrid)
     {
         float3 gridCoord = barycentrics * localRes;
@@ -84,7 +71,72 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         float lineIntensity = 1.0f - saturate(min(edge.x, min(edge.y, edge.z)) - 0.5f);
         return float4(lerp(float3(0.1f, 0.1f, 0.12f), float3(0.0f, 1.0f, 0.5f), lineIntensity), 1.0f);
     }
-    
+
+    // Early return to show the ground truth
+    bool showGroundTruth = (renderFlags & (1 << 3)) != 0;
+    if (showGroundTruth) 
+    {
+        // RNG per-pixel 
+        uint pixelSeed = (uint)input.Position.x ^ pcgHash((uint)input.Position.y);
+        uint rng = pcgHash(pixelSeed ^ pcgHash(frameIndex));
+
+        float3 N = normalize(input.Normal);
+        float3 worldPos = input.worldPos;
+
+        // Trace Shadow Ray(s)
+        float shadowAccumulation = 0.0f;
+        float shadowMask = 1.0f;
+        if ((lightingMode == 2 || lightingMode == 3))
+        {
+            for (uint s = 0; s < shadowSamples; ++s) // Using your UI-controlled cbuffer var
+            {
+                // Jitter the sun direction using our PRNG
+                float3 jitteredSunDir = getConeSample(rand(rng), rand(rng), sunDirection, shadowSoftnessAngle);
+
+                RayDesc shadowRay = { worldPos + N * 0.05f, 0.0f, jitteredSunDir, 10000.0f };
+                RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qShadow;
+                qShadow.TraceRayInline(SceneBVH, 0, 0xFF, shadowRay);
+                qShadow.Proceed();
+            
+                shadowAccumulation += (qShadow.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
+            }
+            shadowMask = shadowAccumulation / max(1.0f, (float)shadowSamples);
+        }
+
+        // Trace AO Rays
+        float aoAccumulation = 0.0f;
+        float aoMask = 1.0f;
+        if ((lightingMode == 1 || lightingMode == 3))
+        {
+            for (uint i = 0; i < aoSamples; ++i) // Use cbuffer var
+            {
+                float3 sampleDir = getCosineHemisphereSample(rand(rng), rand(rng), N);
+
+                RayDesc aoRay = { worldPos + N * 0.05f, 0.0f, sampleDir, aoRadius }; // Use cbuffer var
+                RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> qAO;
+                qAO.TraceRayInline(SceneBVH, 0, 0xFF, aoRay);
+                qAO.Proceed();
+            
+                aoAccumulation += (qAO.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
+            }
+            aoMask = aoAccumulation / max(1.0f, (float)aoSamples);
+        }
+
+        // Sample Albedo
+        float4 albedo = BindlessTextures[materialIdx * 6 + 0].Sample(LinearSampler, input.UV);
+        if (useTexturelessView) albedo.rgb = float3(0.8f, 0.8f, 0.8f);
+
+        // Calculate Multi-Sampled Lighting
+        float fDiffuseLength = saturate(dot(N, normalize(sunDirection)));
+        float3 directLight = 0.0f;
+        if (!disableDirectionalLight)
+            directLight = fDiffuseLength * albedo.rgb * (float3(1.0f, 1.0f, 1.0f) * sunIntensity) * shadowMask;
+        float3 ambientColor = disableDirectionalLight ? float3(1.0f, 1.0f, 1.0f) : float3(0.1f, 0.1f, 0.1f); 
+        float3 finalColor = directLight + (albedo.rgb * ambientColor * aoMask);
+
+        return float4(finalColor, albedo.a);
+    }
+
     // Output raw network predictions (RGB target) Note: Index is now 4!
     if (lightingMode == 4)
         return float4(saturate(activationsA[0].xyz), 1.0f);
@@ -92,9 +144,6 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     // Extract network predictions based on active visualization mode
     float shadowMask = (lightingMode == 2 || lightingMode == 3) ? saturate(activationsA[0].x) : 1.0f;
     float aoMask     = (lightingMode == 1 || lightingMode == 3) ? saturate(activationsA[0].y) : 1.0f;
-    
-    bool useTexturelessView      = (renderFlags & (1 << 0)) == 0;
-    bool disableDirectionalLight = (renderFlags & (1 << 1)) == 0;
 
     // Sample bindless material textures
     float4 albedo = BindlessTextures[materialIdx * 6 + 0].Sample(LinearSampler, input.UV);

@@ -76,6 +76,8 @@ namespace Sponza
         inline bool GetDirectionalLightEnabled() const { return m_Config.directionalLightEnabled; }
         inline void SetShowSubdivisionGrid(bool show) { m_Config.showSubdivisionGrid = show; }
         inline bool GetShowSubdivisionGrid() const { return m_Config.showSubdivisionGrid; }
+        inline void SetShowGroundTruthEnabled(bool show) { m_Config.showGroundTruth = show; }
+        inline bool GetShowGroundTruthEnabled() const { return m_Config.showGroundTruth; }
 
     private:
         // --- Initialization Helpers ---
@@ -125,10 +127,17 @@ namespace Sponza
             float    weightDecay = 0.01f;
             float    screenSpaceRatio = 0.85f;
             float    aoRadius = 150.f;
+            int      aoSamples = 4;
+            int      shadowSamples = 1;
+            float    shadowSoftnessAngle = 0.0f;
             int      lightingMode = 3;
             bool     texturesEnabled = true;
             bool     directionalLightEnabled = true;
             bool     showSubdivisionGrid = false;
+            bool     showGroundTruth = false;
+
+            bool enableAutoPause = false;
+            float autoPauseThreshold = 0.015f;
         };
 
         GateConfig m_Config;
