@@ -1,0 +1,653 @@
+Folder PATH listing
+Volume serial number is 0000003E 90F0:67A0
+C:.
++¦¦¦.vs
+-   L¦¦¦DirectX-Graphics-Samples
+-       +¦¦¦copilot-chat
+-       -   L¦¦¦348cc29b
+-       -       L¦¦¦sessions
+-       +¦¦¦CopilotIndices
+-       -   L¦¦¦17.14.1593.33849
+-       +¦¦¦FileContentIndex
+-       L¦¦¦v17
++¦¦¦Assets
++¦¦¦Libraries
+-   +¦¦¦D3D12RaytracingFallback
+-   -   +¦¦¦Data
+-   -   +¦¦¦Include
+-   -   L¦¦¦src
+-   -       +¦¦¦dxc
+-   -       -   L¦¦¦hlsl
+-   -       +¦¦¦FallbackLayerUnitTests
+-   -       L¦¦¦PropertySheets
+-   +¦¦¦D3DX12
+-   +¦¦¦D3DX12AffinityLayer
+-   -   +¦¦¦Desktop
+-   -   L¦¦¦UWP
+-   L¦¦¦D3DX12Residency
++¦¦¦MiniEngine
+-   +¦¦¦Build
+-   -   L¦¦¦x64
+-   -       +¦¦¦Debug
+-   -       -   +¦¦¦Intermediate
+-   -       -   -   +¦¦¦Core
+-   -       -   -   -   L¦¦¦Core.tlog
+-   -       -   -   +¦¦¦Model
+-   -       -   -   -   L¦¦¦Model.tlog
+-   -       -   -   +¦¦¦ModelConverter
+-   -       -   -   -   L¦¦¦ModelConverter.tlog
+-   -       -   -   L¦¦¦ModelViewer
+-   -       -   -       L¦¦¦ModelViewer.tlog
+-   -       -   L¦¦¦Output
+-   -       -       +¦¦¦Core
+-   -       -       -   +¦¦¦CompiledShaders
+-   -       -       -   L¦¦¦D3D12
+-   -       -       +¦¦¦Model
+-   -       -       -   L¦¦¦CompiledShaders
+-   -       -       +¦¦¦ModelConverter
+-   -       -       -   +¦¦¦Bistro
+-   -       -       -   -   L¦¦¦Textures
+-   -       -       -   +¦¦¦D3D12
+-   -       -       -   +¦¦¦Sponza
+-   -       -       -   +¦¦¦StanfordBunny
+-   -       -       -   -   L¦¦¦textures
+-   -       -       -   +¦¦¦StanfordDragon
+-   -       -       -   -   L¦¦¦textures
+-   -       -       -   L¦¦¦Table
+-   -       -       -       L¦¦¦textures
+-   -       -       L¦¦¦ModelViewer
+-   -       -           +¦¦¦D3D12
+-   -       -           +¦¦¦Sponza
+-   -       -           L¦¦¦Textures
+-   -       L¦¦¦Release
+-   -           +¦¦¦Intermediate
+-   -           -   +¦¦¦Core
+-   -           -   -   L¦¦¦Core.tlog
+-   -           -   +¦¦¦Model
+-   -           -   -   L¦¦¦Model.tlog
+-   -           -   L¦¦¦ModelViewer
+-   -           -       L¦¦¦ModelViewer.tlog
+-   -           L¦¦¦Output
+-   -               +¦¦¦Core
+-   -               -   +¦¦¦CompiledShaders
+-   -               -   L¦¦¦D3D12
+-   -               +¦¦¦Model
+-   -               -   L¦¦¦CompiledShaders
+-   -               L¦¦¦ModelViewer
+-   -                   +¦¦¦D3D12
+-   -                   +¦¦¦Sponza
+-   -                   L¦¦¦Textures
+-   +¦¦¦Core
+-   -   +¦¦¦Fonts
+-   -   +¦¦¦imgui
+-   -   -   +¦¦¦.github
+-   -   -   -   +¦¦¦ISSUE_TEMPLATE
+-   -   -   -   L¦¦¦workflows
+-   -   -   +¦¦¦docs
+-   -   -   +¦¦¦examples
+-   -   -   -   +¦¦¦example_allegro5
+-   -   -   -   +¦¦¦example_android_opengl3
+-   -   -   -   -   L¦¦¦android
+-   -   -   -   -       +¦¦¦app
+-   -   -   -   -       -   L¦¦¦src
+-   -   -   -   -       -       L¦¦¦main
+-   -   -   -   -       -           L¦¦¦java
+-   -   -   -   -       L¦¦¦gradle
+-   -   -   -   +¦¦¦example_apple_metal
+-   -   -   -   -   +¦¦¦example_apple_metal.xcodeproj
+-   -   -   -   -   +¦¦¦iOS
+-   -   -   -   -   L¦¦¦macOS
+-   -   -   -   +¦¦¦example_apple_opengl2
+-   -   -   -   -   L¦¦¦example_apple_opengl2.xcodeproj
+-   -   -   -   +¦¦¦example_glfw_metal
+-   -   -   -   +¦¦¦example_glfw_opengl2
+-   -   -   -   +¦¦¦example_glfw_opengl3
+-   -   -   -   +¦¦¦example_glfw_vulkan
+-   -   -   -   +¦¦¦example_glfw_wgpu
+-   -   -   -   +¦¦¦example_glut_opengl2
+-   -   -   -   +¦¦¦example_null
+-   -   -   -   +¦¦¦example_sdl2_directx11
+-   -   -   -   +¦¦¦example_sdl2_metal
+-   -   -   -   +¦¦¦example_sdl2_opengl2
+-   -   -   -   +¦¦¦example_sdl2_opengl3
+-   -   -   -   +¦¦¦example_sdl2_sdlrenderer2
+-   -   -   -   +¦¦¦example_sdl2_vulkan
+-   -   -   -   +¦¦¦example_sdl2_wgpu
+-   -   -   -   +¦¦¦example_sdl3_directx11
+-   -   -   -   +¦¦¦example_sdl3_metal
+-   -   -   -   +¦¦¦example_sdl3_opengl3
+-   -   -   -   +¦¦¦example_sdl3_sdlgpu3
+-   -   -   -   +¦¦¦example_sdl3_sdlrenderer3
+-   -   -   -   +¦¦¦example_sdl3_vulkan
+-   -   -   -   +¦¦¦example_sdl3_wgpu
+-   -   -   -   +¦¦¦example_win32_directx10
+-   -   -   -   +¦¦¦example_win32_directx11
+-   -   -   -   +¦¦¦example_win32_directx12
+-   -   -   -   +¦¦¦example_win32_directx9
+-   -   -   -   +¦¦¦example_win32_opengl3
+-   -   -   -   +¦¦¦example_win32_vulkan
+-   -   -   -   L¦¦¦libs
+-   -   -   -       +¦¦¦emscripten
+-   -   -   -       +¦¦¦glfw
+-   -   -   -       -   +¦¦¦include
+-   -   -   -       -   -   L¦¦¦GLFW
+-   -   -   -       -   +¦¦¦lib-vc2010-32
+-   -   -   -       -   L¦¦¦lib-vc2010-64
+-   -   -   -       L¦¦¦usynergy
+-   -   -   L¦¦¦misc
+-   -   -       +¦¦¦cpp
+-   -   -       +¦¦¦debuggers
+-   -   -       +¦¦¦fonts
+-   -   -       +¦¦¦freetype
+-   -   -       L¦¦¦single_file
+-   -   +¦¦¦Math
+-   -   +¦¦¦Shaders
+-   -   L¦¦¦Util
+-   +¦¦¦Model
+-   -   L¦¦¦Shaders
+-   +¦¦¦ModelConverter
+-   +¦¦¦ModelViewer
+-   -   +¦¦¦Sponza
+-   -   -   L¦¦¦pbr
+-   -   +¦¦¦SponzaGltf
+-   -   -   +¦¦¦glTF
+-   -   -   L¦¦¦screenshot
+-   -   L¦¦¦Textures
+-   +¦¦¦PropertySheets
+-   L¦¦¦Tools
+-       +¦¦¦Scripts
+-       -   L¦¦¦ProjectTemplates
+-       L¦¦¦SDFFontCreator
++¦¦¦Packages
+-   +¦¦¦assimp-v143.5.4.3
+-   -   L¦¦¦build
+-   -       L¦¦¦native
+-   -           +¦¦¦include
+-   -           -   L¦¦¦assimp
+-   -           -       L¦¦¦Compiler
+-   -           +¦¦¦Win32
+-   -           -   L¦¦¦v143
+-   -           -       +¦¦¦bin
+-   -           -       L¦¦¦lib
+-   -           L¦¦¦x64
+-   -               L¦¦¦v143
+-   -                   +¦¦¦bin
+-   -                   L¦¦¦lib
+-   +¦¦¦directxmesh_desktop_win10.2024.10.29.1
+-   -   +¦¦¦build
+-   -   -   L¦¦¦native
+-   -   +¦¦¦docs
+-   -   +¦¦¦images
+-   -   +¦¦¦include
+-   -   L¦¦¦native
+-   -       L¦¦¦lib
+-   -           +¦¦¦ARM64
+-   -           -   +¦¦¦Debug
+-   -           -   L¦¦¦Release
+-   -           +¦¦¦x64
+-   -           -   +¦¦¦Debug
+-   -           -   L¦¦¦Release
+-   -           L¦¦¦x86
+-   -               +¦¦¦Debug
+-   -               L¦¦¦Release
+-   +¦¦¦directxtex_desktop_win10.2024.10.29.1
+-   -   +¦¦¦build
+-   -   -   L¦¦¦native
+-   -   +¦¦¦docs
+-   -   +¦¦¦images
+-   -   +¦¦¦include
+-   -   L¦¦¦native
+-   -       L¦¦¦lib
+-   -           +¦¦¦ARM64
+-   -           -   +¦¦¦Debug
+-   -           -   L¦¦¦Release
+-   -           +¦¦¦x64
+-   -           -   +¦¦¦Debug
+-   -           -   L¦¦¦Release
+-   -           L¦¦¦x86
+-   -               +¦¦¦Debug
+-   -               L¦¦¦Release
+-   +¦¦¦directxtk12_desktop_2019.2024.10.29.1
+-   -   +¦¦¦build
+-   -   -   L¦¦¦native
+-   -   +¦¦¦docs
+-   -   +¦¦¦images
+-   -   +¦¦¦include
+-   -   L¦¦¦native
+-   -       L¦¦¦lib
+-   -           +¦¦¦ARM64
+-   -           -   +¦¦¦Debug
+-   -           -   L¦¦¦Release
+-   -           +¦¦¦x64
+-   -           -   +¦¦¦Debug
+-   -           -   L¦¦¦Release
+-   -           L¦¦¦x86
+-   -               +¦¦¦Debug
+-   -               L¦¦¦Release
+-   +¦¦¦Microsoft.Direct3D.D3D12.1.618.3
+-   -   L¦¦¦build
+-   -       L¦¦¦native
+-   -           +¦¦¦bin
+-   -           -   +¦¦¦arm64
+-   -           -   +¦¦¦win32
+-   -           -   L¦¦¦x64
+-   -           +¦¦¦include
+-   -           -   L¦¦¦d3dx12
+-   -           L¦¦¦src
+-   -               L¦¦¦d3dx12
+-   +¦¦¦Microsoft.Direct3D.D3D12.1.619.0
+-   -   L¦¦¦build
+-   -       L¦¦¦native
+-   -           +¦¦¦bin
+-   -           -   +¦¦¦arm64
+-   -           -   +¦¦¦win32
+-   -           -   L¦¦¦x64
+-   -           +¦¦¦include
+-   -           -   L¦¦¦d3dx12
+-   -           L¦¦¦src
+-   -               L¦¦¦d3dx12
+-   +¦¦¦Microsoft.Direct3D.DXC.1.9.2602.17
+-   -   L¦¦¦build
+-   -       L¦¦¦native
+-   -           +¦¦¦bin
+-   -           -   +¦¦¦arm64
+-   -           -   +¦¦¦x64
+-   -           -   L¦¦¦x86
+-   -           +¦¦¦include
+-   -           -   +¦¦¦hlsl
+-   -           -   -   L¦¦¦vk
+-   -           -   -       L¦¦¦khr
+-   -           -   L¦¦¦Support
+-   -           L¦¦¦lib
+-   -               +¦¦¦arm64
+-   -               +¦¦¦x64
+-   -               L¦¦¦x86
+-   +¦¦¦Microsoft.Direct3D.WARP.1.0.15-preview
+-   -   L¦¦¦build
+-   -       L¦¦¦native
+-   -           L¦¦¦bin
+-   -               +¦¦¦arm64
+-   -               +¦¦¦win32
+-   -               L¦¦¦x64
+-   +¦¦¦WinPixEventRuntime.1.0.240308001
+-   -   +¦¦¦bin
+-   -   -   +¦¦¦ARM64
+-   -   -   L¦¦¦x64
+-   -   +¦¦¦build
+-   -   L¦¦¦Include
+-   -       L¦¦¦WinPixEventRuntime
+-   +¦¦¦zlib-msvc-x64.1.2.11.8900
+-   -   L¦¦¦build
+-   -       L¦¦¦native
+-   -           +¦¦¦bin_debug
+-   -           +¦¦¦bin_release
+-   -           +¦¦¦include
+-   -           +¦¦¦lib_debug
+-   -           +¦¦¦lib_release
+-   -           L¦¦¦share
+-   -               +¦¦¦man
+-   -               -   L¦¦¦man3
+-   -               L¦¦¦pkgconfig
+-   L¦¦¦zlib-vc140-static-64.1.2.11
+-       +¦¦¦build
+-       -   L¦¦¦native
+-       L¦¦¦lib
+-           L¦¦¦native
+-               +¦¦¦include
+-               L¦¦¦libs
+-                   L¦¦¦x64
+-                       L¦¦¦static
+-                           +¦¦¦Debug
+-                           L¦¦¦Release
++¦¦¦Samples
+-   L¦¦¦Desktop
+-       +¦¦¦D3D1211On12
+-       -   L¦¦¦src
+-       +¦¦¦D3D12Bundles
+-       -   L¦¦¦src
+-       +¦¦¦D3D12DepthBoundsTest
+-       -   L¦¦¦src
+-       +¦¦¦D3D12DynamicIndexing
+-       -   L¦¦¦src
+-       +¦¦¦D3D12ExecuteIndirect
+-       -   L¦¦¦src
+-       +¦¦¦D3D12Fullscreen
+-       -   L¦¦¦src
+-       +¦¦¦D3D12HDR
+-       -   L¦¦¦src
+-       +¦¦¦D3D12HelloWorld
+-       -   L¦¦¦src
+-       -       +¦¦¦HelloBundles
+-       -       +¦¦¦HelloConstBuffers
+-       -       +¦¦¦HelloFrameBuffering
+-       -       +¦¦¦HelloGenericPrograms
+-       -       +¦¦¦HelloMeshNodes
+-       -       +¦¦¦HelloTexture
+-       -       +¦¦¦HelloTightAlignment
+-       -       +¦¦¦HelloTriangle
+-       -       -   +¦¦¦bin
+-       -       -   -   L¦¦¦x64
+-       -       -   -       L¦¦¦Debug
+-       -       -   -           L¦¦¦D3D12
+-       -       -   L¦¦¦obj
+-       -       -       L¦¦¦x64
+-       -       -           L¦¦¦Debug
+-       -       -               L¦¦¦D3D12Hel.5018F6A3.tlog
+-       -       +¦¦¦HelloVADecode
+-       -       +¦¦¦HelloVAEncode
+-       -       +¦¦¦HelloVAResourceInterop
+-       -       +¦¦¦HelloWindow
+-       -       -   +¦¦¦bin
+-       -       -   -   L¦¦¦x64
+-       -       -   -       L¦¦¦Debug
+-       -       -   -           L¦¦¦D3D12
+-       -       -   L¦¦¦obj
+-       -       -       L¦¦¦x64
+-       -       -           L¦¦¦Debug
+-       -       -               L¦¦¦D3D12HelloWindow.tlog
+-       -       +¦¦¦HelloWorkGraphs
+-       -       +¦¦¦packages
+-       -       -   +¦¦¦Microsoft.Direct3D.D3D12.1.618.3
+-       -       -   -   L¦¦¦build
+-       -       -   -       L¦¦¦native
+-       -       -   -           +¦¦¦bin
+-       -       -   -           -   +¦¦¦arm64
+-       -       -   -           -   +¦¦¦win32
+-       -       -   -           -   L¦¦¦x64
+-       -       -   -           +¦¦¦include
+-       -       -   -           -   L¦¦¦d3dx12
+-       -       -   -           L¦¦¦src
+-       -       -   -               L¦¦¦d3dx12
+-       -       -   +¦¦¦Microsoft.Direct3D.D3D12.1.715.0-preview
+-       -       -   -   L¦¦¦build
+-       -       -   -       L¦¦¦native
+-       -       -   -           +¦¦¦bin
+-       -       -   -           -   +¦¦¦arm64
+-       -       -   -           -   +¦¦¦win32
+-       -       -   -           -   L¦¦¦x64
+-       -       -   -           +¦¦¦include
+-       -       -   -           -   L¦¦¦d3dx12
+-       -       -   -           L¦¦¦src
+-       -       -   -               L¦¦¦d3dx12
+-       -       -   +¦¦¦Microsoft.Direct3D.DXC.1.8.2404.55-mesh-nodes-preview
+-       -       -   -   L¦¦¦build
+-       -       -   -       L¦¦¦native
+-       -       -   -           +¦¦¦bin
+-       -       -   -           -   +¦¦¦arm64
+-       -       -   -           -   +¦¦¦x64
+-       -       -   -           -   L¦¦¦x86
+-       -       -   -           +¦¦¦include
+-       -       -   -           L¦¦¦lib
+-       -       -   -               +¦¦¦arm64
+-       -       -   -               +¦¦¦x64
+-       -       -   -               L¦¦¦x86
+-       -       -   +¦¦¦Microsoft.Direct3D.DXC.1.8.2505.32
+-       -       -   -   L¦¦¦build
+-       -       -   -       L¦¦¦native
+-       -       -   -           +¦¦¦bin
+-       -       -   -           -   +¦¦¦arm64
+-       -       -   -           -   +¦¦¦x64
+-       -       -   -           -   L¦¦¦x86
+-       -       -   -           +¦¦¦include
+-       -       -   -           -   +¦¦¦hlsl
+-       -       -   -           -   -   +¦¦¦dx
+-       -       -   -           -   -   L¦¦¦vk
+-       -       -   -           -   -       L¦¦¦khr
+-       -       -   -           -   L¦¦¦Support
+-       -       -   -           L¦¦¦lib
+-       -       -   -               +¦¦¦arm64
+-       -       -   -               +¦¦¦x64
+-       -       -   -               L¦¦¦x86
+-       -       -   +¦¦¦Microsoft.Direct3D.VideoAccelerationCompatibilityPack.1.0.2
+-       -       -   -   L¦¦¦build
+-       -       -   -       L¦¦¦native
+-       -       -   -           +¦¦¦arm64
+-       -       -   -           -   +¦¦¦bin
+-       -       -   -           -   +¦¦¦include
+-       -       -   -           -   -   L¦¦¦va
+-       -       -   -           -   L¦¦¦lib
+-       -       -   -           -       L¦¦¦pkgconfig
+-       -       -   -           +¦¦¦win32
+-       -       -   -           -   +¦¦¦bin
+-       -       -   -           -   +¦¦¦include
+-       -       -   -           -   -   L¦¦¦va
+-       -       -   -           -   L¦¦¦lib
+-       -       -   -           -       L¦¦¦pkgconfig
+-       -       -   -           L¦¦¦x64
+-       -       -   -               +¦¦¦bin
+-       -       -   -               +¦¦¦include
+-       -       -   -               -   L¦¦¦va
+-       -       -   -               L¦¦¦lib
+-       -       -   -                   L¦¦¦pkgconfig
+-       -       -   L¦¦¦Microsoft.Direct3D.WARP.1.0.16.1
+-       -       -       L¦¦¦build
+-       -       -           L¦¦¦native
+-       -       -               L¦¦¦bin
+-       -       -                   +¦¦¦arm64
+-       -       -                   +¦¦¦win32
+-       -       -                   L¦¦¦x64
+-       -       L¦¦¦WorkGraphsSandbox
+-       +¦¦¦D3D12HeterogeneousMultiadapter
+-       -   L¦¦¦src
+-       +¦¦¦D3D12LinkedGpus
+-       -   L¦¦¦src
+-       -       +¦¦¦D3DX12AffinityLayer
+-       -       +¦¦¦LinkedGpus
+-       -       +¦¦¦LinkedGpusAffinity
+-       -       L¦¦¦SingleGpu
+-       +¦¦¦D3D12MeshShaders
+-       -   L¦¦¦src
+-       -       +¦¦¦Assets
+-       -       +¦¦¦DynamicLOD
+-       -       +¦¦¦MeshletCull
+-       -       +¦¦¦MeshletGenerator
+-       -       +¦¦¦MeshletInstancing
+-       -       +¦¦¦MeshletRender
+-       -       L¦¦¦WavefrontConverter
+-       +¦¦¦D3D12Multithreading
+-       -   L¦¦¦src
+-       +¦¦¦D3D12nBodyGravity
+-       -   L¦¦¦src
+-       +¦¦¦D3D12On7
+-       -   L¦¦¦src
+-       +¦¦¦D3D12PipelineStateCache
+-       -   L¦¦¦src
+-       +¦¦¦D3D12PredicationQueries
+-       -   L¦¦¦src
+-       +¦¦¦D3D12Raytracing
+-       -   +¦¦¦Build
+-       -   -   L¦¦¦x64
+-       -   -       +¦¦¦Debug
+-       -   -       -   +¦¦¦Intermediate
+-       -   -       -   -   +¦¦¦Core
+-       -   -       -   -   -   L¦¦¦Core.tlog
+-       -   -       -   -   +¦¦¦D3D12RaytracingMiniEngineSample
+-       -   -       -   -   -   L¦¦¦D3D12Ray.315A1E1B.tlog
+-       -   -       -   -   L¦¦¦Model
+-       -   -       -   -       L¦¦¦Model.tlog
+-       -   -       -   L¦¦¦Output
+-       -   -       -       +¦¦¦Core
+-       -   -       -       -   +¦¦¦CompiledShaders
+-       -   -       -       -   L¦¦¦D3D12
+-       -   -       -       +¦¦¦D3D12RaytracingMiniEngineSample
+-       -   -       -       -   +¦¦¦CompiledShaders
+-       -   -       -       -   L¦¦¦D3D12
+-       -   -       -       L¦¦¦Model
+-       -   -       -           L¦¦¦CompiledShaders
+-       -   -       L¦¦¦Release
+-       -   -           +¦¦¦Intermediate
+-       -   -           -   +¦¦¦Core
+-       -   -           -   -   L¦¦¦Core.tlog
+-       -   -           -   +¦¦¦D3D12RaytracingMiniEngineSample
+-       -   -           -   -   L¦¦¦D3D12Ray.315A1E1B.tlog
+-       -   -           -   L¦¦¦Model
+-       -   -           -       L¦¦¦Model.tlog
+-       -   -           L¦¦¦Output
+-       -   -               +¦¦¦Core
+-       -   -               -   +¦¦¦CompiledShaders
+-       -   -               -   L¦¦¦D3D12
+-       -   -               +¦¦¦D3D12RaytracingMiniEngineSample
+-       -   -               -   +¦¦¦CompiledShaders
+-       -   -               -   L¦¦¦D3D12
+-       -   -               L¦¦¦Model
+-       -   -                   L¦¦¦CompiledShaders
+-       -   +¦¦¦src
+-       -   -   +¦¦¦D3D12OMMOfflineBaker
+-       -   -   +¦¦¦D3D12RaytracingHelloShaderExecutionReordering
+-       -   -   -   +¦¦¦bin
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   -           L¦¦¦D3D12
+-       -   -   -   L¦¦¦obj
+-       -   -   -       L¦¦¦x64
+-       -   -   -           L¦¦¦Release
+-       -   -   -               L¦¦¦D3D12Ray.390A4D56.tlog
+-       -   -   +¦¦¦D3D12RaytracingHelloWorld
+-       -   -   -   +¦¦¦bin
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       +¦¦¦Debug
+-       -   -   -   -       -   L¦¦¦D3D12
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   -           L¦¦¦D3D12
+-       -   -   -   L¦¦¦obj
+-       -   -   -       L¦¦¦x64
+-       -   -   -           +¦¦¦Debug
+-       -   -   -           -   +¦¦¦CompiledShaders
+-       -   -   -           -   L¦¦¦D3D12Ray.5018F6A3.tlog
+-       -   -   -           L¦¦¦Release
+-       -   -   -               +¦¦¦CompiledShaders
+-       -   -   -               L¦¦¦D3D12Ray.5018F6A3.tlog
+-       -   -   +¦¦¦D3D12RaytracingLibrarySubobjects
+-       -   -   -   +¦¦¦bin
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   -           L¦¦¦D3D12
+-       -   -   -   L¦¦¦obj
+-       -   -   -       L¦¦¦x64
+-       -   -   -           L¦¦¦Release
+-       -   -   -               +¦¦¦CompiledShaders
+-       -   -   -               L¦¦¦D3D12Ray.0AF699F0.tlog
+-       -   -   +¦¦¦D3D12RaytracingMiniEngineSample
+-       -   -   -   +¦¦¦Sponza
+-       -   -   -   -   L¦¦¦pbr
+-       -   -   -   +¦¦¦StanfordDragon
+-       -   -   -   -   L¦¦¦textures
+-       -   -   -   +¦¦¦Table
+-       -   -   -   -   L¦¦¦textures
+-       -   -   -   L¦¦¦Textures
+-       -   -   +¦¦¦D3D12RaytracingOpacityMicromaps
+-       -   -   -   +¦¦¦bin
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       +¦¦¦Debug
+-       -   -   -   -       -   L¦¦¦D3D12
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   -           L¦¦¦D3D12
+-       -   -   -   L¦¦¦obj
+-       -   -   -       L¦¦¦x64
+-       -   -   -           +¦¦¦Debug
+-       -   -   -           -   +¦¦¦CompiledShaders
+-       -   -   -           -   L¦¦¦D3D12Ray.A62C42DA.tlog
+-       -   -   -           L¦¦¦Release
+-       -   -   -               +¦¦¦CompiledShaders
+-       -   -   -               L¦¦¦D3D12Ray.A62C42DA.tlog
+-       -   -   +¦¦¦D3D12RaytracingProceduralGeometry
+-       -   -   -   +¦¦¦bin
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       +¦¦¦Debug
+-       -   -   -   -       -   L¦¦¦D3D12
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   -           L¦¦¦D3D12
+-       -   -   -   +¦¦¦obj
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       +¦¦¦Debug
+-       -   -   -   -       -   +¦¦¦CompiledShaders
+-       -   -   -   -       -   L¦¦¦D3D12Ray.0C266269.tlog
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   -           +¦¦¦CompiledShaders
+-       -   -   -   -           L¦¦¦D3D12Ray.0C266269.tlog
+-       -   -   -   L¦¦¦util
+-       -   -   +¦¦¦D3D12RaytracingRealTimeDenoisedAmbientOcclusion
+-       -   -   -   +¦¦¦Assets
+-       -   -   -   -   +¦¦¦car
+-       -   -   -   -   -   L¦¦¦models
+-       -   -   -   -   +¦¦¦dragon
+-       -   -   -   -   -   L¦¦¦models
+-       -   -   -   -   +¦¦¦grass
+-       -   -   -   -   +¦¦¦groundplane
+-       -   -   -   -   +¦¦¦house
+-       -   -   -   -   -   +¦¦¦models
+-       -   -   -   -   -   L¦¦¦textures
+-       -   -   -   -   +¦¦¦mirrorquad
+-       -   -   -   -   +¦¦¦quad
+-       -   -   -   -   +¦¦¦spaceship
+-       -   -   -   -   -   L¦¦¦models
+-       -   -   -   -   +¦¦¦Textures
+-       -   -   -   -   -   L¦¦¦FlowerRoad
+-       -   -   -   -   L¦¦¦wind
+-       -   -   -   +¦¦¦bin
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   +¦¦¦obj
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   -           +¦¦¦CompiledShaders
+-       -   -   -   -           L¦¦¦D3D12Ray.19585C81.tlog
+-       -   -   -   +¦¦¦RTAO
+-       -   -   -   -   L¦¦¦Shaders
+-       -   -   -   -       +¦¦¦Denoising
+-       -   -   -   -       L¦¦¦Ray sorting
+-       -   -   -   L¦¦¦SampleCore
+-       -   -   -       +¦¦¦PBRTParser
+-       -   -   -       +¦¦¦Shaders
+-       -   -   -       -   L¦¦¦util
+-       -   -   -       L¦¦¦util
+-       -   -   +¦¦¦D3D12RaytracingSakuraForestSER
+-       -   -   -   +¦¦¦bin
+-       -   -   -   -   L¦¦¦x64
+-       -   -   -   -       +¦¦¦Debug
+-       -   -   -   -       -   L¦¦¦D3D12
+-       -   -   -   -       L¦¦¦Release
+-       -   -   -   L¦¦¦obj
+-       -   -   -       L¦¦¦x64
+-       -   -   -           +¦¦¦Debug
+-       -   -   -           -   L¦¦¦D3D12Ray.8A6F63FD.tlog
+-       -   -   -           L¦¦¦Release
+-       -   -   -               +¦¦¦CompiledShaders
+-       -   -   -               L¦¦¦D3D12Ray.8A6F63FD.tlog
+-       -   -   L¦¦¦D3D12RaytracingSimpleLighting
+-       -   -       +¦¦¦bin
+-       -   -       -   L¦¦¦x64
+-       -   -       -       +¦¦¦Debug
+-       -   -       -       -   L¦¦¦D3D12
+-       -   -       -       L¦¦¦Release
+-       -   -       -           L¦¦¦D3D12
+-       -   -       L¦¦¦obj
+-       -   -           L¦¦¦x64
+-       -   -               +¦¦¦Debug
+-       -   -               -   +¦¦¦CompiledShaders
+-       -   -               -   L¦¦¦D3D12Ray.A0848C98.tlog
+-       -   -               L¦¦¦Release
+-       -   -                   +¦¦¦CompiledShaders
+-       -   -                   L¦¦¦D3D12Ray.A0848C98.tlog
+-       -   L¦¦¦tools
+-       -       L¦¦¦x64
+-       +¦¦¦D3D12ReservedResources
+-       -   L¦¦¦src
+-       +¦¦¦D3D12Residency
+-       -   L¦¦¦src
+-       +¦¦¦D3D12SM6WaveIntrinsics
+-       -   L¦¦¦src
+-       +¦¦¦D3D12SmallResources
+-       -   L¦¦¦src
+-       +¦¦¦D3D12StateObjectDatabase
+-       -   L¦¦¦src
+-       +¦¦¦D3D12VariableRateShading
+-       -   L¦¦¦src
+-       L¦¦¦D3D12xGPU
+-           L¦¦¦src
++¦¦¦TechniqueDemos
+-   L¦¦¦D3D12MemoryManagement
+-       L¦¦¦src
+L¦¦¦Tools
+    L¦¦¦DXGIAdapterRemovalSupportTest
+        L¦¦¦src

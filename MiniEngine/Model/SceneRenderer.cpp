@@ -1,4 +1,4 @@
-// File: SponzaRenderer.cpp
+// File: SceneRenderer.cpp
 
 //
 // Copyright (c) Microsoft. All rights reserved.
@@ -24,7 +24,7 @@
 #include "SystemTime.h"
 #include "ShadowCamera.h"
 #include "ParticleEffects.h"
-#include "SponzaRenderer.h"
+#include "SceneRenderer.h"
 #include "Renderer.h"
 
 // From Model
@@ -65,7 +65,7 @@ namespace Sponza
     Vector3 m_SunDirection;
     ShadowCamera m_SunShadow;
 
-    ExpVar m_AmbientIntensity("Sponza/Lighting/Ambient Intensity", 0.1f, -16.0f, 16.0f, 0.1f);
+    ExpVar m_AmbientIntensity("Sponza/Lighting/Ambient Intensity", 0.35f, -16.0f, 16.0f, 0.1f);
     ExpVar m_SunLightIntensity("Sponza/Lighting/Sun Light Intensity", 4.0f, 0.0f, 16.0f, 0.1f);
     NumVar m_SunOrientation("Sponza/Lighting/Sun Orientation", -0.5f, -100.0f, 100.0f, 0.1f );
     NumVar m_SunInclination("Sponza/Lighting/Sun Inclination", 0.75f, 0.0f, 1.0f, 0.01f );

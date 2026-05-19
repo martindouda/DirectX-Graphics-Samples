@@ -136,8 +136,9 @@ namespace Sponza
             bool     showSubdivisionGrid = false;
             bool     showGroundTruth = false;
 
-            bool enableAutoPause = false;
-            float autoPauseThreshold = 0.015f;
+            bool enableAutoPauseTarget = false;
+            bool enableAutoPauseSteps = false;
+            float autoPauseThreshold = 0.02f;
         };
 
         GateConfig m_Config;

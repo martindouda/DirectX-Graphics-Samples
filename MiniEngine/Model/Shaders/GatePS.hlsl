@@ -131,7 +131,7 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
         float3 directLight = 0.0f;
         if (!disableDirectionalLight)
             directLight = fDiffuseLength * albedo.rgb * (float3(1.0f, 1.0f, 1.0f) * sunIntensity) * shadowMask;
-        float3 ambientColor = disableDirectionalLight ? float3(1.0f, 1.0f, 1.0f) : float3(0.1f, 0.1f, 0.1f); 
+        float3 ambientColor = disableDirectionalLight ? float3(1.0f, 1.0f, 1.0f) : float3(0.35f, 0.35f, 0.35f); 
         float3 finalColor = directLight + (albedo.rgb * ambientColor * aoMask);
 
         return float4(finalColor, albedo.a);
@@ -176,7 +176,7 @@ float4 main(VSOutput input, uint primitiveID : SV_PrimitiveID, float3 barycentri
     if (!disableDirectionalLight)
         directLight = (fDiffuseLength * albedo.rgb + fSpecularLength * float3(0.56f, 0.56f, 0.56f)) * (float3(1.0f, 1.0f, 1.0f) * sunIntensity) * shadowMask;
     
-    float3 ambientColor = disableDirectionalLight ? float3(1.0f, 1.0f, 1.0f) : float3(0.1f, 0.1f, 0.1f); 
+    float3 ambientColor = disableDirectionalLight ? float3(1.0f, 1.0f, 1.0f) : float3(0.35f, 0.35f, 0.35f); 
     float3 finalColor = directLight + (albedo.rgb * ambientColor * aoMask);
 
     return float4(finalColor, albedo.a);

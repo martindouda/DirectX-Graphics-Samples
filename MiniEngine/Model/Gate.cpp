@@ -108,16 +108,17 @@ namespace Sponza
 
     void Gate::LoadModel(ModelH3D& model)
     {
-        model.Load(L"Sponza/sponza.h3d");
         //model.Load(L"Sponza/sponza_no_curtain_stripped.h3d");
-        //model.Load(L"StanfordDragon/Dragon.h3d");
+        model.Load(L"Sponza/sponza.h3d");
         //model.Load(L"Table/Table.h3d");
+        //model.Load(L"StanfordDragon/Dragon.h3d");
         m_Model = &model;
 	}
 
     void Gate::Startup(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
         m_GateColorBuffer.Create(L"Gate Output Buffer", g_SceneColorBuffer.GetWidth(), g_SceneColorBuffer.GetHeight(), 1, g_SceneColorBuffer.GetFormat());
+        m_GateColorBuffer.SetClearColor(Color::Color(0.53f, 0.81f, 0.98f, 1.0f));
 
         m_LossHistory.resize(MAX_LOSS_HISTORY, 0.0f);
         m_LossBuffer.Create(L"Loss Buffer", 1, 4);
@@ -658,15 +659,14 @@ namespace Sponza
 
             UpdateLossHistory(frameAverageLoss);
 
-            // --- AUTO PAUSE LOGIC ---
-            if (m_Config.enableAutoPause && m_TrainingStep > 10)
+			// Auto-pause check
+            if (m_Config.enableAutoPauseTarget && m_TrainingStep > 10)
             {
                 float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
 
                 if (currentLoss > 0.000001f && currentLoss <= m_Config.autoPauseThreshold)
                     m_Config.isTrainingPaused = true;
             }
-            // ------------------------
 
             m_LossReadbackBuffer.Unmap();
         }
@@ -743,6 +743,9 @@ namespace Sponza
             globalTriangleOffset += (indexCount / 3);
         }
 
+        gfxContext.TransitionResource(m_GateColorBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        gfxContext.FlushResourceBarriers();
+
         cmdList->EndQuery(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 9); // END 9
         cmdList->ResolveQueryData(m_GpuTimerHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, m_GpuTimerReadback.Get(), 0);
     }
@@ -787,7 +790,7 @@ namespace Sponza
                 auto updateTimer = [&](float& trackingVar, int startIndex)
                     {
                         if (timestamps[startIndex + 1] > timestamps[startIndex])
-                            trackingVar = trackingVar * 0.9f + (float)((timestamps[startIndex + 1] - timestamps[startIndex]) * invFreq) * 0.1f;
+                            trackingVar = trackingVar * 0.99f + (float)((timestamps[startIndex + 1] - timestamps[startIndex]) * invFreq) * 0.01f;
                     };
 
                 updateTimer(m_GpuTimeBackprop, 0);
@@ -823,8 +826,38 @@ namespace Sponza
 
         ImGui::Separator();
         ImGui::Spacing();
+        ImGui::Text("Memory Footprint (VRAM)");
+        const float toMB = 1.0f / (1024.0f * 1024.0f);
+        float duplicatedFeaturesMB = (float)m_TotalMeshColorPoints * m_FeatureQuartets * 16.0f * toMB;
+        float uniqueFeaturesMB = (float)m_UniqueSpatialVertexCount * m_FeatureQuartets * 16.0f * toMB;
+        float adamMB = (float)m_UniqueSpatialVertexCount * m_FeatureQuartets * 48.0f * toMB;
+        float gradientsMB = (float)m_UniqueSpatialVertexCount * m_FeatureQuartets * 16.0f * toMB;
+        float optStatesMB = adamMB + gradientsMB;
+        float indicesMB = ((float)m_UniqueSpatialVertexCount * 8.0f + (float)m_TotalMeshColorPoints * 4.0f) * toMB;
+        float dirtyFlagsMB = (float)m_UniqueSpatialVertexCount * 4.0f * toMB;
+        float mlpMB = (float)m_MlpQuartets * (16.0f + 16.0f + 48.0f) * toMB;
+        float totalMB = duplicatedFeaturesMB + uniqueFeaturesMB + optStatesMB + indicesMB + dirtyFlagsMB + mlpMB;
+        ImGui::Text("Duplicated Features:   %6.2f MB", duplicatedFeaturesMB);
+        ImGui::Text("Unique Features:       %6.2f MB", uniqueFeaturesMB);
+        ImGui::Text("Adam States & Grads:   %6.2f MB", optStatesMB);
+        ImGui::Text("Spatial Indices:       %6.2f MB", indicesMB);
+        ImGui::TextDisabled("---------------------------------");
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Total Ext. Allocation: %6.2f MB", totalMB);
+        ImGui::Spacing();
+
+        ImGui::Separator();
+        ImGui::Spacing();
         ImGui::Text("Training Loss (MSE)");
         float currentLoss = m_LossHistory[(m_LossHistoryOffset == 0 ? MAX_LOSS_HISTORY : m_LossHistoryOffset) - 1];
+        
+        ImGui::SameLine();
+        if (ImGui::Button("Copy Value"))
+        {
+            char clipboardText[32];
+            sprintf_s(clipboardText, "%.5f", currentLoss);
+            ImGui::SetClipboardText(clipboardText);
+        }
+
         char overlay[32];
         sprintf_s(overlay, "Loss: %.5f", currentLoss);
         float maxLoss = *std::max_element(m_LossHistory.begin(), m_LossHistory.end());
@@ -838,6 +871,9 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::Text("Network Status");
         ImGui::Text("Training Step: %u", m_TrainingStep);
+        ImGui::Text("Unique Feature Vectors: %u", m_UniqueSpatialVertexCount);
+        ImGui::Text("Duplicated Feature Vectors: %u", m_TotalMeshColorPoints);
+
         ImGui::InputInt("Max Resolution Scale", &m_Config.desiredResolution, 1);
         m_Config.desiredResolution = std::max(1, std::min(m_Config.desiredResolution, 1024));
         ImGui::SliderInt("Feature Dimension", (int*)&m_Config.desiredFeatureFloats, 1, 32);
@@ -853,11 +889,16 @@ namespace Sponza
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
             ResetTraining();
 
+        if (m_TrainingStep % 100 == 0 && m_Config.enableAutoPauseSteps)
+			m_Config.isTrainingPaused = true;
+
         ImGui::Checkbox("Pause Training", &m_Config.isTrainingPaused);
         ImGui::SameLine();
-        ImGui::Checkbox("Auto-Pause on Target Loss", &m_Config.enableAutoPause);
+        ImGui::Checkbox("Auto-Pause on Target Loss", &m_Config.enableAutoPauseTarget);
+        ImGui::SameLine();
+        ImGui::Checkbox("Auto-Pause on 100 Steps", &m_Config.enableAutoPauseSteps);
 
-        if (m_Config.enableAutoPause)
+        if (m_Config.enableAutoPauseTarget)
         {
             ImGui::Indent();
             ImGui::SliderFloat("Target MSE", &m_Config.autoPauseThreshold, 0.0001f, 0.05f, "%.5f", ImGuiSliderFlags_Logarithmic);
@@ -873,10 +914,10 @@ namespace Sponza
         ImGui::Spacing();
         ImGui::Text("Learning Target Generation");
         ImGui::SliderFloat("AO Radius", &m_Config.aoRadius, 10.0f, 1000.0f, "%.1f");
-        ImGui::SliderInt("AO Samples", &m_Config.aoSamples, 1, 32);
+        ImGui::SliderInt("AO Samples", &m_Config.aoSamples, 1, 128);
         ImGui::Spacing();
         ImGui::SliderFloat("Shadow Softness Angle", &m_Config.shadowSoftnessAngle, 0.0f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderInt("Shadow Samples", &m_Config.shadowSamples, 1, 32);
+        ImGui::SliderInt("Shadow Samples", &m_Config.shadowSamples, 1, 128);
         ImGui::Spacing();
 
         // --- SMART UI LOGIC ---

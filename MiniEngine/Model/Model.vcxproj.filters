@@ -4,7 +4,7 @@
     <ClCompile Include="ModelH3D.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="SponzaRenderer.cpp">
+    <ClCompile Include="SceneRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Renderer.cpp">
@@ -59,7 +59,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="SponzaRenderer.h">
+    <ClInclude Include="SceneRenderer.h">
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="Renderer.h">

@@ -36,7 +36,7 @@
 #include "ShadowCamera.h"
 #include "ParticleEffectManager.h"
 #include "GameInput.h"
-#include "SponzaRenderer.h"
+#include "SceneRenderer.h"
 #include "ModelH3D.h"
 #include "Renderer.h"
 
@@ -726,6 +726,7 @@ void D3D12RaytracingMiniEngineSample::Startup()
     PostEffects::EnableAdaptation = false;//true;
     SSAO::Enable = false;
     FXAA::Enable = true;
+    
 
     Renderer::Initialize();
 
