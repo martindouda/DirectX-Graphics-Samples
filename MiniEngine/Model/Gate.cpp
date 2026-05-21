@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <ppl.h>
 #include <numeric>
+#include <string>
+#include <fstream>
 
 #include "Renderer.h"
 #include "EngineTuning.h"
@@ -108,12 +110,30 @@ namespace Sponza
 
     void Gate::LoadModel(ModelH3D& model)
     {
-        //model.Load(L"Sponza/sponza_no_curtain_stripped.h3d");
-        model.Load(L"Sponza/sponza.h3d");
-        //model.Load(L"Table/Table.h3d");
-        //model.Load(L"StanfordDragon/Dragon.h3d");
+        std::string modelPathStr = "Sponza/sponza.h3d"; // Default
+        std::ifstream file("modelPath.txt");
+
+        if (file.is_open())
+        {
+            std::string line;
+            while (std::getline(file, line))
+            {
+                line.erase(0, line.find_first_not_of(" \t\r\n"));
+                line.erase(line.find_last_not_of(" \t\r\n") + 1);
+
+                if (line.empty() || line.substr(0, 2) == "//")
+                    continue;
+
+                modelPathStr = line;
+                break;
+            }
+            file.close();
+        }
+
+        std::wstring wModelPath(modelPathStr.begin(), modelPathStr.end());
+        model.Load(wModelPath.c_str());
         m_Model = &model;
-	}
+    }
 
     void Gate::Startup(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
     {
@@ -783,7 +803,7 @@ namespace Sponza
         uint64_t* timestamps = nullptr;
         if (m_GpuTimerReadback && SUCCEEDED(m_GpuTimerReadback->Map(0, nullptr, (void**)&timestamps)))
         {
-            if (m_GpuTimestampFreq > 0)
+            if (m_GpuTimestampFreq > 0 && !m_Config.isTrainingPaused)
             {
                 double invFreq = 1000.0 / (double)m_GpuTimestampFreq; // ms
 
@@ -889,14 +909,14 @@ namespace Sponza
         if (ImGui::Button("Reset Training & Apply", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
             ResetTraining();
 
-        if (m_TrainingStep % 100 == 0 && m_Config.enableAutoPauseSteps)
+        if (m_TrainingStep % 1000 == 0 && m_Config.enableAutoPauseSteps)
 			m_Config.isTrainingPaused = true;
 
         ImGui::Checkbox("Pause Training", &m_Config.isTrainingPaused);
         ImGui::SameLine();
         ImGui::Checkbox("Auto-Pause on Target Loss", &m_Config.enableAutoPauseTarget);
         ImGui::SameLine();
-        ImGui::Checkbox("Auto-Pause on 100 Steps", &m_Config.enableAutoPauseSteps);
+        ImGui::Checkbox("Auto-Pause on 1000 Steps", &m_Config.enableAutoPauseSteps);
 
         if (m_Config.enableAutoPauseTarget)
         {

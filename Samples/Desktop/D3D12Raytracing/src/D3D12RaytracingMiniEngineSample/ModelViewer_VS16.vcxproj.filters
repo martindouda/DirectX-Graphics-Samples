@@ -32,7 +32,12 @@
     <FxCompile Include="RayGenerationShaderLib.hlsl" />
     <FxCompile Include="RayGenerationShaderSSRLib.hlsl" />
     <FxCompile Include="RayGenerationShadowsLib.hlsl" />
-    <FxCompile Include="*Lib.hlsl" />
+    <FxCompile Include="hitShaderLib.hlsl" />
+    <FxCompile Include="missShaderLib.hlsl" />
+    <FxCompile Include="missShadowsLib.hlsl" />
+    <FxCompile Include="RayGenerationShaderLib.hlsl" />
+    <FxCompile Include="RayGenerationShaderSSRLib.hlsl" />
+    <FxCompile Include="RayGenerationShadowsLib.hlsl" />
     <FxCompile Include="*Lib.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
@@ -429,5 +434,8 @@
     <Filter Include="Resources">
       <UniqueIdentifier>{8be3895e-9f38-4b8d-bf48-b94d69970e47}</UniqueIdentifier>
     </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="modelPath.txt" />
   </ItemGroup>
 </Project>

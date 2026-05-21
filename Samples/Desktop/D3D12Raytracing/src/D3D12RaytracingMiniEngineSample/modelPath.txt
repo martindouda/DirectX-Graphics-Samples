@@ -1,0 +1,3 @@
+Sponza/sponza.h3d
+//Table/Table.h3d
+//StanfordDragon/Dragon.h3d

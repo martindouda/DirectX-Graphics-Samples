@@ -127,7 +127,7 @@ namespace Sponza
             float    weightDecay = 0.01f;
             float    screenSpaceRatio = 0.85f;
             float    aoRadius = 150.f;
-            int      aoSamples = 4;
+            int      aoSamples = 1;
             int      shadowSamples = 1;
             float    shadowSoftnessAngle = 0.0f;
             int      lightingMode = 3;
